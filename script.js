@@ -5,7 +5,7 @@ let currentTorrentId = null;
 
 const TRAKT_CLIENT_ID = '027c95542a22d861d8a4e82b7535560b457639527f09b5526315682c611488c9';
 // PASTE YOUR CLOUDFLARE URL BELOW (keep the /?url= at the end!)
-const MY_PROXY = "https://torrent-proxy.manosfragakis05.workers.dev/";
+const MY_PROXY = "https://torrent-proxy.manosfragakis05.workers.dev/?url=";
 
 // --- THE CLOUDFLARE TUNNEL ---
 async function smartFetch(targetUrl, options = {}) {
