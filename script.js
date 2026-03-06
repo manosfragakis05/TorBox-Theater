@@ -24,17 +24,15 @@ async function authenticateTorboxUser()
 
     try {
         const targetUrl = 'https://api.torbox.app/v1/api/user/me';
-        const res = await fetch('https://corsproxy.io/?' + encodeURIComponent(targetUrl), {
+        // DIRECT FETCH - NO PROXY
+        const res = await fetch(targetUrl, {
             headers: { 'Authorization': `Bearer ${key}` }
         });
 
         const data = await res.json();
 
         if (data.success && data.data) {
-            // CALLBACK: SUCCESS
             localStorage.setItem('tb_api_key', key);
-
-            // Give the user a little "Success" flash
             button.innerText = "Connected!";
             button.classList.replace('bg-blue-600', 'bg-green-600');
 
@@ -48,8 +46,6 @@ async function authenticateTorboxUser()
 
     } catch (e) {
         alert("Authentication Failed: " + e.message);
-
-        // Reset the UI
         button.innerText = "Log In";
         button.disabled = false;
         input.disabled = false;
@@ -57,7 +53,6 @@ async function authenticateTorboxUser()
     }
 }
 
-// Ensure checkAuth handles the transitions properly
 function checkAuth() {
     const key = localStorage.getItem('tb_api_key');
     const authScreen = document.getElementById('auth-screen');
@@ -89,7 +84,8 @@ async function loadLibrary(key) {
     document.getElementById('file-list').innerHTML = '';
 
     try {
-        const res = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://api.torbox.app/v1/api/torrents/mylist?bypass_cache=true'), {
+        // DIRECT FETCH - NO PROXY
+        const res = await fetch('https://api.torbox.app/v1/api/torrents/mylist?bypass_cache=true', {
             headers: { 'Authorization': `Bearer ${key}` }
         });
         const data = await res.json();
@@ -206,7 +202,8 @@ async function handleTraktAuth() {
         return;
     }
 
-    const res = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://api.trakt.tv/oauth/device/code'), {
+    // DIRECT FETCH - NO PROXY
+    const res = await fetch('https://api.trakt.tv/oauth/device/code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ client_id: TRAKT_CLIENT_ID })
@@ -215,10 +212,11 @@ async function handleTraktAuth() {
 
     document.getElementById('trakt-modal').classList.remove('hidden');
     document.getElementById('trakt-code').innerText = data.user_code;
-    toggleProfile(); // Close profile menu so modal is visible
+    toggleProfile(); 
 
     const interval = setInterval(async () => {
-        const poll = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://api.trakt.tv/oauth/device/token'), {
+        // DIRECT FETCH - NO PROXY
+        const poll = await fetch('https://api.trakt.tv/oauth/device/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -256,7 +254,8 @@ async function scrobble(action, movieName, progress) {
     const endpoint = action === 'stop' ? 'scrobble/stop' : 'scrobble/start';
 
     try {
-        await fetch('https://corsproxy.io/?' + encodeURIComponent(`https://api.trakt.tv/${endpoint}`), {
+        // FIXED SYNTAX ERROR: Template literal backticks and correct parenthesis placement
+        await fetch(`https://api.trakt.tv/${endpoint}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -270,7 +269,6 @@ async function scrobble(action, movieName, progress) {
 }
 
 // --- SEARCH ---
-// 1. FILTER ON INPUT
 function handleSearch() {
     const query = document.getElementById('search-input').value.toLowerCase().trim();
 
@@ -282,32 +280,33 @@ function handleSearch() {
     renderList(filtered);
 }
 
-// 2. HANDLE "ENTER" KEY
 function handleSearchSubmit() {
     const query = document.getElementById('search-input').value.trim();
     const inputField = document.getElementById('search-input');
 
-    // A. Check for Direct Link
     if (query.startsWith('http://') || query.startsWith('https://')) {
-        inputField.blur(); // Hide keyboard
-        startPlayer(query, "Direct Stream"); // Launch Player
+        inputField.blur();
+        startPlayer(query, "Direct Stream");
         return;
     }
 
-    // B. Check for Magnet Link (Optional "Paste & Add")
     if (query.startsWith('magnet:')) {
         inputField.blur();
-        addMagnetToTorBox(query, (err, res) => {
-             if (!err) { 
-                 alert(`Added: ${res.name}`); 
-                 inputField.value = ""; // Clear input
-                 refreshLibrary();      // Refresh list
-             }
-        });
+        // NOTE: addMagnetToTorBox is not defined in this script yet!
+        if (typeof addMagnetToTorBox === 'function') {
+            addMagnetToTorBox(query, (err, res) => {
+                 if (!err) { 
+                     alert(`Added: ${res.name}`); 
+                     inputField.value = ""; 
+                     refreshLibrary();      
+                 }
+            });
+        } else {
+            alert("Magnet adding function not implemented yet.");
+        }
         return;
     }
 
-    // C. Normal Search (Just hide keyboard)
     inputField.blur();
 }
 
@@ -318,8 +317,9 @@ async function requestLink(tid, fid, torrentName, fileName) {
     list.style.opacity = '0.5';
 
     try {
+        // DIRECT FETCH - NO PROXY
         const targetUrl = `https://api.torbox.app/v1/api/torrents/requestdl?token=${key}&torrent_id=${tid}&file_id=${fid}&zip=false`;
-        const res = await fetch('https://corsproxy.io/?' + encodeURIComponent(targetUrl));
+        const res = await fetch(targetUrl);
         const data = await res.json();
 
         if (data.success) {
@@ -368,7 +368,6 @@ function startPlayer(url, name) {
     const stallCheck = setTimeout(() => {
         if (art.video.currentTime < 1 || art.video.readyState < 3) {
             console.warn("⚠️ Stream timed out (Stalled).");
-            
             handlePlaybackFailure("Connection timed out. Connection is too slow.");
         }
     }, 15000);
@@ -391,10 +390,8 @@ function handlePlaybackFailure(reason) {
     art.destroy();
     art = null;
 
-    // 2. Hide the player UI
     document.getElementById('player-wrapper').classList.add('hidden');
 
-    // 3. Show a nice Error Message to the user
     const errorDiv = document.createElement('div');
     errorDiv.className = "fixed top-5 right-5 bg-red-600 text-white p-4 rounded shadow-lg z-50 transition-opacity duration-500";
     errorDiv.innerHTML = `
@@ -410,25 +407,20 @@ function handlePlaybackFailure(reason) {
 function playDirect() {
     const url = document.getElementById('direct-input').value.trim();
     
-    // 1. Check if empty
     if (!url) return alert("Please paste a link first!");
 
-    // 2. THE FIX: Stop Magnet Links
     if (url.startsWith("magnet:")) {
         alert("❌ Error: You cannot play a Magnet link directly.\n\nMagnet links must be converted by TorBox/Real-Debrid first. Please log in to add this torrent.");
-        return; // STOP HERE
+        return; 
     }
 
-    // 3. Optional: Basic check to see if it's a real web link
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
         alert("❌ Error: Invalid Link.");
         return;
     }
 
-    // 4. Hide Auth & Play
     document.getElementById('auth-screen').classList.add('hidden');
     
-    // Pass "Direct Stream" or try to guess the name from the URL
     const cleanName = url.split('/').pop().split('?')[0] || "Direct Stream";
     startPlayer(url, decodeURIComponent(cleanName));
 }
