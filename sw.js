@@ -1,25 +1,41 @@
-const CACHE_NAME = 'torbox-theater-v1';
+const CACHE_NAME = 'torbox-theater-v2'; // BUMPED TO V2!
 const ASSETS = [
     './',
     './index.html',
     './script.js',
-    './style.css' // Include this since it's linked in your HTML!
+    './style.css'
 ];
 
-// Install: Cache the UI Shell
+// Install: Cache the UI Shell and force update
 self.addEventListener('install', (event) => {
+    self.skipWaiting(); // Forces the browser to activate this new version immediately
     event.waitUntil(
         caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
     );
 });
 
-// Fetch: Serve UI from cache, let API and Videos pass through the internet
+// Activate: Delete any old versions (v1) of the cache
+self.addEventListener('activate', (event) => {
+    event.waitUntil(
+        caches.keys().then((cacheNames) => {
+            return Promise.all(
+                cacheNames.map((cacheName) => {
+                    if (cacheName !== CACHE_NAME) {
+                        console.log('Deleting old cache:', cacheName);
+                        return caches.delete(cacheName); // Wipes out the old proxy code!
+                    }
+                })
+            );
+        })
+    );
+    self.clients.claim(); // Take control of the page immediately
+});
+
+// Fetch: Serve UI from cache, let API and Videos pass through
 self.addEventListener('fetch', (event) => {
-    // Only intercept local files (HTML, JS, CSS)
     if (!event.request.url.startsWith(self.location.origin)) {
         return; 
     }
-
     event.respondWith(
         caches.match(event.request).then((cachedResponse) => {
             return cachedResponse || fetch(event.request);
