@@ -4,6 +4,14 @@ let currentStreamUrl = "";
 let currentTorrentId = null;
 
 const TRAKT_CLIENT_ID = '027c95542a22d861d8a4e82b7535560b457639527f09b5526315682c611488c9';
+// PASTE YOUR CLOUDFLARE URL BELOW (keep the /?url= at the end!)
+const MY_PROXY = "https://torrent-proxy.manosfragakis05.workers.dev/";
+
+// --- THE CLOUDFLARE TUNNEL ---
+async function smartFetch(targetUrl, options = {}) {
+    // We encode the TorBox URL so it safely passes through the Cloudflare URL
+    return fetch(MY_PROXY + encodeURIComponent(targetUrl), options);
+}
 
 // --- AUTH & PROFILE ---
 function isLoggedIn() {
@@ -24,8 +32,8 @@ async function authenticateTorboxUser()
 
     try {
         const targetUrl = 'https://api.torbox.app/v1/api/user/me';
-        // DIRECT FETCH - NO PROXY
-        const res = await fetch(targetUrl, {
+        // USE SMARTFETCH HERE
+        const res = await smartFetch(targetUrl, {
             headers: { 'Authorization': `Bearer ${key}` }
         });
 
@@ -84,8 +92,8 @@ async function loadLibrary(key) {
     document.getElementById('file-list').innerHTML = '';
 
     try {
-        // DIRECT FETCH - NO PROXY
-        const res = await fetch('https://api.torbox.app/v1/api/torrents/mylist?bypass_cache=true', {
+        // USE SMARTFETCH HERE
+        const res = await smartFetch('https://api.torbox.app/v1/api/torrents/mylist?bypass_cache=true', {
             headers: { 'Authorization': `Bearer ${key}` }
         });
         const data = await res.json();
@@ -202,8 +210,8 @@ async function handleTraktAuth() {
         return;
     }
 
-    // DIRECT FETCH - NO PROXY
-    const res = await fetch('https://api.trakt.tv/oauth/device/code', {
+    // USE SMARTFETCH HERE
+    const res = await smartFetch('https://api.trakt.tv/oauth/device/code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ client_id: TRAKT_CLIENT_ID })
@@ -215,8 +223,8 @@ async function handleTraktAuth() {
     toggleProfile(); 
 
     const interval = setInterval(async () => {
-        // DIRECT FETCH - NO PROXY
-        const poll = await fetch('https://api.trakt.tv/oauth/device/token', {
+        // USE SMARTFETCH HERE
+        const poll = await smartFetch('https://api.trakt.tv/oauth/device/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -254,8 +262,8 @@ async function scrobble(action, movieName, progress) {
     const endpoint = action === 'stop' ? 'scrobble/stop' : 'scrobble/start';
 
     try {
-        // FIXED SYNTAX ERROR: Template literal backticks and correct parenthesis placement
-        await fetch(`https://api.trakt.tv/${endpoint}`, {
+        // USE SMARTFETCH HERE
+        await smartFetch(`https://api.trakt.tv/${endpoint}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -292,7 +300,6 @@ function handleSearchSubmit() {
 
     if (query.startsWith('magnet:')) {
         inputField.blur();
-        // NOTE: addMagnetToTorBox is not defined in this script yet!
         if (typeof addMagnetToTorBox === 'function') {
             addMagnetToTorBox(query, (err, res) => {
                  if (!err) { 
@@ -317,9 +324,9 @@ async function requestLink(tid, fid, torrentName, fileName) {
     list.style.opacity = '0.5';
 
     try {
-        // DIRECT FETCH - NO PROXY
         const targetUrl = `https://api.torbox.app/v1/api/torrents/requestdl?token=${key}&torrent_id=${tid}&file_id=${fid}&zip=false`;
-        const res = await fetch(targetUrl);
+        // USE SMARTFETCH HERE
+        const res = await smartFetch(targetUrl);
         const data = await res.json();
 
         if (data.success) {
