@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TorBox Theater</title>
+    
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0f172a">
+    <link rel="apple-touch-icon" href="icon-512.png">
+
+    <script src="https://gpac.github.io/mp4box.js/dist/mp4box.all.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body class="bg-slate-900 text-slate-100 font-sans pb-20">
+
+    <div id="auth-screen"
+        class="hidden fixed inset-0 bg-slate-900 z-50 flex flex-col justify-center p-6 overflow-y-auto">
+        <div class="max-w-md mx-auto w-full">
+
+            <div class="text-center mb-8">
+                <h1 class="text-3xl font-bold text-blue-500 mb-2">TorBox Theater</h1>
+                <p class="text-slate-400">Your cloud media, unblocked.</p>
+            </div>
+
+            <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl mb-6">
+                <h2 class="text-xl font-bold text-white mb-4">Connect Cloud</h2>
+
+                <form onsubmit="event.preventDefault(); authenticateTorboxUser();">
+                    <input id="api-input" type="password" placeholder="Paste TorBox API Key"
+                        autocomplete="one-time-code"
+                        class="w-full bg-slate-900 border border-slate-600 p-4 rounded-xl text-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 mb-4 transition-all">
+
+                    <button type="submit" id="loggin-btn"
+                        class="w-full bg-blue-600 hover:bg-blue-500 font-bold p-4 rounded-xl text-lg transition-all shadow-lg shadow-blue-900/20">
+                        Log In
+                    </button>
+                </form>
+
+                <p class="text-xs text-center text-slate-500 mt-3">Key stored locally on device.</p>
+            </div>
+
+            <div class="relative flex py-2 items-center mb-6">
+                <div class="flex-grow border-t border-slate-700"></div>
+                <span class="flex-shrink mx-4 text-slate-500 text-sm font-bold">OR</span>
+                <div class="flex-grow border-t border-slate-700"></div>
+            </div>
+
+            <div class="bg-slate-800/50 p-6 rounded-2xl border border-dashed border-slate-700">
+                <h2 class="text-lg font-bold text-slate-300 mb-4">Paste & Play</h2>
+
+                <form onsubmit="event.preventDefault(); playDirect();" class="flex gap-2">
+                    <input id="direct-input" type="text" placeholder="https://..."
+                        class="w-full bg-slate-900 border border-slate-600 p-3 rounded-xl outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500">
+
+                    <button type="submit"
+                        class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 rounded-xl transition-all flex items-center justify-center shadow-lg shadow-blue-900/20">
+                        <svg fill="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"
+                            class="w-5 h-5 pointer-events-none">
+                            <path stroke-linecap="round" stroke-linejoin="round"
+                                d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 0 1 0 1.971l-11.54 6.347a1.125 1.125 0 0 1-1.667-.985V5.653Z" />
+                        </svg>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <nav class="sticky top-0 z-40 bg-slate-900/95 backdrop-blur border-b border-slate-900 p-3">
+        <div class="max-w-4xl mx-auto flex items-center justify-between gap-3">
+
+            <button onclick="goHome()"
+                class="p-2.5 rounded-xl text-slate-400 hover:text-blue-500 hover:bg-slate-800 transition-colors flex-shrink-0">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6">
+                    </path>
+                </svg>
+            </button>
+
+            <div class="flex-1 flex gap-2 max-w-lg">
+                <form onsubmit="event.preventDefault(); handleSearchSubmit();" class="relative flex-1">
+                    <input id="search-input" type="text" placeholder="Search or Paste Link..." oninput="handleSearch()"
+                        class="w-full bg-slate-800 border border-slate-700 text-white pl-10 pr-4 py-2.5 rounded-xl text-sm focus:ring-2 focus:ring-blue-600 outline-none">
+                    <svg class="absolute left-3 top-3 w-4 h-4 text-slate-400 pointer-events-none" fill="none"
+                        stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                    </svg>
+                </form>
+
+                <button onclick="handleSearchSubmit()"
+                    class="bg-slate-800 border border-slate-700 p-2.5 rounded-xl text-slate-400 active:bg-slate-700 hover:text-white transition flex-shrink-0">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="size-5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+                    </svg>
+                </button>
+            </div>
+
+            <div class="relative flex-shrink-0">
+                <button onclick="toggleProfile(event)"
+                    class="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold border-2 border-slate-800 focus:outline-none hover:bg-blue-500 transition shadow-lg shadow-blue-900/20">
+                    <svg class="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                    </svg>
+                </button>
+
+                <div id="profile-dropdown"
+                    class="hidden absolute right-0 mt-2 w-64 bg-slate-800 rounded-xl shadow-2xl border border-slate-700 z-50 p-4">
+                    <h3 class="text-xs font-bold text-slate-500 uppercase mb-3">Settings</h3>
+                    <div class="mb-4">
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="font-bold text-sm">TorBox</span>
+                            <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                        </div>
+                        <button onclick="logoutTorBox()"
+                            class="w-full text-xs bg-slate-700 hover:bg-red-900/50 text-slate-300 hover:text-red-400 py-2 rounded transition">
+                            Disconnect API
+                        </button>
+                    </div>
+                    <div>
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="font-bold text-sm">Trakt</span>
+                            <span id="trakt-status-dot" class="w-2 h-2 bg-red-500 rounded-full"></span>
+                        </div>
+                        <button id="trakt-action-btn" onclick="handleTraktAuth()"
+                            class="w-full text-xs bg-slate-700 hover:bg-blue-600 text-slate-300 hover:text-white py-2 rounded transition">
+                            Connect Trakt
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </nav>
+
+    <div id="player-wrapper" class="hidden w-full bg-black shadow-2xl transition-all duration-300">
+        <div class="max-w-4xl mx-auto">
+            <div class="artplayer-app"></div>
+        </div>
+    </div>
+
+    <div id="trakt-modal" class="hidden fixed inset-0 z-50 bg-black/90 flex flex-col justify-center p-6 text-center">
+        <h2 class="text-2xl font-bold text-blue-500 mb-4">Connect Trakt</h2>
+        <p class="text-slate-400 mb-6">Enter this code at <br><span
+                class="text-white font-bold">trakt.tv/activate</span></p>
+        <div id="trakt-code"
+            class="text-4xl font-mono font-bold text-white mb-8 tracking-widest bg-slate-800 p-4 rounded-lg select-all">
+            ...</div>
+        <button onclick="closeTraktModal()" class="text-slate-500 hover:text-white">Cancel</button>
+    </div>
+
+    <div id="file-picker" class="hidden fixed inset-0 z-50 bg-black/90 flex flex-col justify-end sm:justify-center p-4">
+        <div class="bg-slate-800 rounded-t-xl sm:rounded-xl max-h-[70vh] flex flex-col max-w-lg mx-auto w-full">
+            <div class="p-4 border-b border-slate-700 flex justify-between items-center">
+                <h3 id="picker-title" class="font-bold text-lg">Select File</h3>
+                <button onclick="closePicker()" class="p-2 bg-slate-700 rounded-full">✕</button>
+            </div>
+            <div id="picker-list" class="overflow-y-auto p-2 space-y-1 flex-1"></div>
+        </div>
+    </div>
+
+    <div id="dashboard" class="p-4 max-w-4xl mx-auto min-h-screen">
+        <div id="loading" class="text-center text-slate-500 mt-10 hidden">Loading your cloud...</div>
+        <div id="file-list" class="space-y-3 mt-2"></div>
+        <div id="empty-state" class="hidden text-center mt-20 text-slate-500">
+            <p>No files found matching that name.</p>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+    <script>
+        // Register the PWA Service Worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then((reg) => console.log('Service Worker Registered!', reg))
+                    .catch((err) => console.error('Service Worker Failed', err));
+            });
+        }
+    </script>
+</body>
+
+</html>
