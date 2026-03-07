@@ -130,8 +130,13 @@ function renderList(items) {
                 <h3 class="font-bold text-slate-100 truncate pr-4">${t.name}</h3>
                 <p class="text-xs text-slate-400">${(t.size / 1073741824).toFixed(2)} GB • ${label}</p>
             </div>
-            <div class="text-blue-500 bg-blue-500/10 p-2 rounded-full">
-                ${vidCount > 1 ? '☰' : '▶'}
+            <div class="flex items-center gap-3">
+                <button onclick="deleteTorrent(${t.id}, event)" class="text-red-500 hover:bg-red-500/20 p-2 rounded-full transition-colors z-10">
+                    🗑️
+                </button>
+                <div class="text-blue-500 bg-blue-500/10 p-2 rounded-full">
+                    ${vidCount > 1 ? '☰' : '▶'}
+                </div>
             </div>
         `;
 
@@ -347,10 +352,20 @@ function startPlayer(url, name) {
 
     if (art) art.destroy();
 
+    // 1. Detect if the file is an MKV
+    const isMkv = name.toLowerCase().endsWith('.mkv') || url.toLowerCase().split('?')[0].endsWith('.mkv');
+    
+    // 2. Detect if the user is on iOS (iPhone or iPad)
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+    // 3. The Smart Router: Only use the engine if it's an MKV ON iOS.
+    const videoType = (isMkv && isIOS) ? 'wasm_mkv' : 'auto';
+
     art = new Artplayer({
         container: '.artplayer-app',
         url: url,
         title: name,
+        type: videoType, // This triggers the interceptor below if needed
         autoSize: false,
         fullscreen: true,
         playsInline: true,
@@ -360,11 +375,39 @@ function startPlayer(url, name) {
         lock: true,
         fastForward: true,
         autoOrientation: true,
-        theme: '#ff0000',
+        theme: '#3b82f6', // Changed to blue to match your UI!
         miniProgressBar: false,
         pip: true,
         screenshot: true,
         autoPlayback: true,
+        
+        // --- THE ENGINE INTERCEPTOR ---
+        customType: {
+            wasm_mkv: async function (videoElement, url, art) {
+                console.log("🍎 iOS + MKV Detected! Waking up Rust Engine...");
+                art.notice.show = "Initializing Rust Engine for iOS...";
+                
+                try {
+                    // 1. Boot up the WebAssembly Engine
+                    await window.initWasm();
+                    console.log("✅ Engine Online.");
+                    art.notice.show = "Demuxing Video Stream...";
+
+                    // 2. Spin up your custom Rust Demuxer
+                    // (Ensure the method names here match exactly what you wrote in your Rust code!)
+                    const demuxer = new window.WasmDemuxer(url);
+                    
+                    // 3. Tell the demuxer to feed the raw video element
+                    await demuxer.play(videoElement);
+                    
+                    console.log("🎬 Engine connected. Playing!");
+                    
+                } catch (error) {
+                    console.error("Engine Crash:", error);
+                    handlePlaybackFailure("WASM Engine failed to decode this MKV.");
+                }
+            }
+        }
     });
 
     art.on('video:error', () => {
@@ -430,6 +473,44 @@ function playDirect() {
     
     const cleanName = url.split('/').pop().split('?')[0] || "Direct Stream";
     startPlayer(url, decodeURIComponent(cleanName));
+}
+
+// --- DELETE TORRENT ---
+async function deleteTorrent(torrentId, event) {
+    // Stop the click from opening the movie
+    if (event) event.stopPropagation(); 
+    
+    if (!confirm("Are you sure you want to delete this from TorBox?")) return;
+
+    const key = localStorage.getItem('tb_api_key');
+    const targetUrl = 'https://api.torbox.app/v1/api/torrents/controltorrent';
+
+    try {
+        // Use your smartFetch proxy here!
+        const res = await smartFetch(targetUrl, {
+            method: 'POST',
+            headers: { 
+                'Authorization': `Bearer ${key}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                torrent_id: torrentId,
+                operation: "delete" // <-- CHANGED TO LOWERCASE!
+            })
+        });
+
+        const data = await res.json();
+        
+        if (data.success) {
+            alert("Deleted successfully!");
+            refreshLibrary(); 
+        } else {
+            alert("Error: " + data.detail);
+        }
+    } catch (e) {
+        console.error("Delete Error:", e);
+        alert("Failed to delete torrent.");
+    }
 }
 
 // Init

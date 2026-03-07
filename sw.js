@@ -1,9 +1,11 @@
-const CACHE_NAME = 'torbox-theater-v3'; // BUMPED TO V2!
+const CACHE_NAME = 'torbox-theater-v4'; // BUMP TO V4!
 const ASSETS = [
     './',
     './index.html',
     './script.js',
-    './style.css'
+    './style.css',
+    './mkv_demuxer.js',
+    './mkv_demuxer_bg.wasm'
 ];
 
 // Install: Cache the UI Shell and force update
