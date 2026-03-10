@@ -13,13 +13,6 @@
     <script src="https://gpac.github.io/mp4box.js/dist/mp4box.all.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <script type="module">
-        import init, { Demuxer } from 'mkv-remux-tool/streaming_engine.js';
-        window.initWasm = init;
-        window.WasmDemuxer = Demuxer;
-    </script>
-
     <link rel="stylesheet" href="style.css">
 </head>
 
@@ -180,7 +173,7 @@
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <script type="module" src="script.js"></script>
     <script>
         // Register the PWA Service Worker
         if ('serviceWorker' in navigator) {

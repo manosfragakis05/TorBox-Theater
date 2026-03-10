@@ -1,3 +1,5 @@
+import { feed, playMKV } from './mkv-remux-tool/mkv_lib.js';
+
 let art = null;
 let allTorrents = [];
 let currentStreamUrl = "";
@@ -9,17 +11,15 @@ const MY_PROXY = "https://torrent-proxy.manosfragakis05.workers.dev/?url=";
 
 // --- THE CLOUDFLARE TUNNEL ---
 async function smartFetch(targetUrl, options = {}) {
-    // We encode the TorBox URL so it safely passes through the Cloudflare URL
     return fetch(MY_PROXY + encodeURIComponent(targetUrl), options);
 }
 
 // --- AUTH & PROFILE ---
 function isLoggedIn() {
-    return !!localStorage.getItem('tb_api_key'); 
+    return !!localStorage.getItem('tb_api_key');
 }
 
-async function authenticateTorboxUser()
-{
+async function authenticateTorboxUser() {
     const input = document.getElementById('api-input');
     const button = document.getElementById('loggin-btn');
     const key = input.value.trim();
@@ -32,7 +32,6 @@ async function authenticateTorboxUser()
 
     try {
         const targetUrl = 'https://api.torbox.app/v1/api/user/me';
-        // USE SMARTFETCH HERE
         const res = await smartFetch(targetUrl, {
             headers: { 'Authorization': `Bearer ${key}` }
         });
@@ -74,7 +73,8 @@ function checkAuth() {
     }
 }
 
-function toggleProfile() {
+function toggleProfile(event) {
+    if (event) event.stopPropagation(); // Fixed the SVG click bug!
     const menu = document.getElementById('profile-dropdown');
     menu.classList.toggle('hidden');
 }
@@ -86,13 +86,27 @@ function logoutTorBox() {
     }
 }
 
+// --- NAVIGATION ---
+function goHome() {
+    // Stop the movie and hide the player
+    if (art) {
+        art.destroy();
+        art = null;
+    }
+    document.getElementById('player-wrapper').classList.add('hidden');
+    document.getElementById('search-input').value = '';
+
+    // Show library again
+    refreshLibrary();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 // --- LIBRARY ---
 async function loadLibrary(key) {
     document.getElementById('loading').classList.remove('hidden');
     document.getElementById('file-list').innerHTML = '';
 
     try {
-        // USE SMARTFETCH HERE
         const res = await smartFetch('https://api.torbox.app/v1/api/torrents/mylist?bypass_cache=true', {
             headers: { 'Authorization': `Bearer ${key}` }
         });
@@ -154,7 +168,7 @@ function renderList(items) {
 
 function refreshLibrary() {
     const key = localStorage.getItem('tb_api_key');
-    loadLibrary(key);
+    if (key) loadLibrary(key);
 }
 
 // --- FILE PICKER ---
@@ -215,7 +229,6 @@ async function handleTraktAuth() {
         return;
     }
 
-    // USE SMARTFETCH HERE
     const res = await smartFetch('https://api.trakt.tv/oauth/device/code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -225,10 +238,9 @@ async function handleTraktAuth() {
 
     document.getElementById('trakt-modal').classList.remove('hidden');
     document.getElementById('trakt-code').innerText = data.user_code;
-    toggleProfile(); 
+    toggleProfile();
 
     const interval = setInterval(async () => {
-        // USE SMARTFETCH HERE
         const poll = await smartFetch('https://api.trakt.tv/oauth/device/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -267,7 +279,6 @@ async function scrobble(action, movieName, progress) {
     const endpoint = action === 'stop' ? 'scrobble/stop' : 'scrobble/start';
 
     try {
-        // USE SMARTFETCH HERE
         await smartFetch(`https://api.trakt.tv/${endpoint}`, {
             method: 'POST',
             headers: {
@@ -285,9 +296,7 @@ async function scrobble(action, movieName, progress) {
 function handleSearch() {
     const query = document.getElementById('search-input').value.toLowerCase().trim();
 
-    if (query.startsWith('http') || query.startsWith('magnet:')) {
-        return; 
-    }
+    if (query.startsWith('http') || query.startsWith('magnet:')) return;
 
     const filtered = allTorrents.filter(t => t.name.toLowerCase().includes(query));
     renderList(filtered);
@@ -307,11 +316,11 @@ function handleSearchSubmit() {
         inputField.blur();
         if (typeof addMagnetToTorBox === 'function') {
             addMagnetToTorBox(query, (err, res) => {
-                 if (!err) { 
-                     alert(`Added: ${res.name}`); 
-                     inputField.value = ""; 
-                     refreshLibrary();      
-                 }
+                if (!err) {
+                    alert(`Added: ${res.name}`);
+                    inputField.value = "";
+                    refreshLibrary();
+                }
             });
         } else {
             alert("Magnet adding function not implemented yet.");
@@ -330,7 +339,6 @@ async function requestLink(tid, fid, torrentName, fileName) {
 
     try {
         const targetUrl = `https://api.torbox.app/v1/api/torrents/requestdl?token=${key}&torrent_id=${tid}&file_id=${fid}&zip=false`;
-        // USE SMARTFETCH HERE
         const res = await smartFetch(targetUrl);
         const data = await res.json();
 
@@ -346,68 +354,54 @@ async function requestLink(tid, fid, torrentName, fileName) {
     }
 }
 
+
 function startPlayer(url, name) {
     currentStreamUrl = url;
     document.getElementById('player-wrapper').classList.remove('hidden');
 
     if (art) art.destroy();
 
-    // 1. Detect if the file is an MKV
     const isMkv = name.toLowerCase().endsWith('.mkv') || url.toLowerCase().split('?')[0].endsWith('.mkv');
-    
-    // 2. Detect if the user is on iOS (iPhone or iPad)
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-    // 3. The Smart Router: Only use the engine if it's an MKV ON iOS.
     const videoType = (isMkv && isIOS) ? 'wasm_mkv' : 'auto';
 
+    // --- 1. DIET ARTPLAYER CONFIGURATION ---
     art = new Artplayer({
         container: '.artplayer-app',
         url: url,
         title: name,
-        type: videoType, // This triggers the interceptor below if needed
+        type: videoType,
         autoSize: false,
-        fullscreen: true,
         playsInline: true,
+        fullscreen: true,
+        fullscreenWeb: true,
         setting: true,
-        playbackRate: true,
-        subtitleOffset: true,
         lock: true,
         fastForward: true,
-        autoOrientation: true,
-        theme: '#3b82f6', // Changed to blue to match your UI!
-        miniProgressBar: false,
+        theme: '#3b82f6',
         pip: true,
-        screenshot: true,
         autoPlayback: true,
-        
-        // --- THE ENGINE INTERCEPTOR ---
-        customType: {
-            wasm_mkv: async function (videoElement, url, art) {
-                console.log("🍎 iOS + MKV Detected! Waking up Rust Engine...");
-                art.notice.show = "Initializing Rust Engine for iOS...";
-                
-                try {
-                    // 1. Boot up the WebAssembly Engine
-                    await window.initWasm();
-                    console.log("✅ Engine Online.");
-                    art.notice.show = "Demuxing Video Stream...";
 
-                    // 2. Spin up your custom Rust Demuxer
-                    // (Ensure the method names here match exactly what you wrote in your Rust code!)
-                    const demuxer = new window.WasmDemuxer(url);
-                    
-                    // 3. Tell the demuxer to feed the raw video element
-                    await demuxer.play(videoElement);
-                    
-                    console.log("🎬 Engine connected. Playing!");
-                    
+        // CPU SAVERS (Prevents DOM Thrashing)
+        miniProgressBar: false,
+        screenshot: false,
+        subtitleOffset: false,
+        playbackRate: false,
+
+        customType: {
+            wasm_mkv: async function (videoElement, artUrl, art) {
+                console.log("🍎 iOS/Forced MKV Detected! Booting WebAssembly Engine...");
+                art.notice.show = "Booting Engine...";
+                try {
+                    // Start by playing the default track (Index 0)
+                    await playMKV(artUrl, videoElement, 0);
                 } catch (error) {
                     console.error("Engine Crash:", error);
-                    handlePlaybackFailure("WASM Engine failed to decode this MKV.");
+                    art.notice.show = "Error: Engine failed to decode this MKV.";
                 }
             }
-        }
+        },
     });
 
     art.on('video:error', () => {
@@ -415,28 +409,103 @@ function startPlayer(url, name) {
         handlePlaybackFailure("Format not supported or link is dead.");
     });
 
-    const stallCheck = setTimeout(() => {
-        if (art.video.currentTime < 1 || art.video.readyState < 3) {
-            console.warn("⚠️ Stream timed out (Stalled).");
-            handlePlaybackFailure("Connection timed out. Connection is too slow.");
-        }
-    }, 15000);
-
-    art.on('video:playing', () => {
-        clearTimeout(stallCheck);
-    });
-
+    // Trakt Scrobbling
     art.on('play', () => { scrobble('start', name, 0); });
     art.on('pause', () => { scrobble('stop', name, art.currentTime / art.duration * 100); });
     art.on('destroy', () => { scrobble('stop', name, art.currentTime / art.duration * 100); });
 
     art.play();
+
+    // --- 2. THE APPLE BYPASS ---
+    art.on('ready', () => {
+        if (isIOS) {
+            console.log("🍎 iPhone detected. Hijacking the Fullscreen button...");
+            art.controls.update({
+                name: 'fullscreen',
+                click: function () {
+                    art.fullscreenWeb = !art.fullscreenWeb;
+                    if (art.fullscreenWeb) art.notice.show = "Switched to Web Fullscreen";
+                }
+            });
+        }
+    });
+
+    // --- 3. THE POLITE SCOUT (Phantom Audio UI Version) ---
+    let scoutSent = false;
+    art.on('video:playing', async () => {
+        if (isMkv && !scoutSent) {
+            scoutSent = true;
+            console.log("🕵️ Native video is playing! Bandwidth is free. Sending Scout...");
+
+            try {
+                const engine = await feed(url);
+
+                if (engine.audioTracks && engine.audioTracks.length > 1) {
+                    console.log(`🎧 Found ${engine.audioTracks.length} tracks! Adding menu...`);
+
+                    const langMap = {
+                        'eng': 'English', 'gr': 'Greek', 'jpn': 'Japanese', 'spa': 'Spanish',
+                        'fre': 'French', 'ger': 'German', 'ita': 'Italian', 'und': 'Unknown'
+                    };
+
+                    const trackOptions = engine.audioTracks.map((t, index) => {
+                        let langName = langMap[t.language] || (index === 0 ? 'Primary' : `Track ${t.track_number}`);
+                        const codecName = t.codec_string ? ` (${t.codec_string})` : '';
+
+                        return {
+                            html: `${langName}${codecName}`,
+                            // CRITICAL CHANGE: We pass the actual MKV Track ID to the engine, not the array index!
+                            trackNumber: t.track_number,
+                            default: index === 0
+                        };
+                    });
+
+                    art.setting.add({
+                        html: 'Audio Track',
+                        tooltip: trackOptions[0].html,
+                        selector: trackOptions,
+                        onSelect: async function (item) {
+                            art.notice.show = `Swapping audio...`;
+
+                            // 1. Save our current state
+                            const savedTime = art.currentTime;
+                            const wasPlaying = art.playing;
+
+                            // 2. Tell the engine to swap the track internally
+                            await engine.switchAudioTrack(item.trackNumber);
+
+                            // 3. THE HIJACK: If we are playing Natively, force the WASM engine!
+                            if (engine.video !== art.video) {
+                                console.log("🎬 Hijacking Native Player -> Switching to WASM Engine...");
+
+                                // Attach the custom engine to the video tag
+                                await playMKV(url, art.video);
+
+                                // Wait for the WASM engine to pipe the first frame, then jump!
+                                const restoreVideo = () => {
+                                    art.currentTime = savedTime;
+                                    if (wasPlaying) art.play();
+                                    art.video.removeEventListener('loadeddata', restoreVideo);
+                                };
+
+                                art.video.addEventListener('loadeddata', restoreVideo);
+                            }
+
+                            return item.html;
+                        }
+                    });
+                }
+            } catch (e) {
+                console.warn("Scout failed to read tracks:", e);
+            }
+        }
+    });
+
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function handlePlaybackFailure(reason) {
     if (!art) return;
-    
     art.destroy();
     art = null;
 
@@ -444,10 +513,7 @@ function handlePlaybackFailure(reason) {
 
     const errorDiv = document.createElement('div');
     errorDiv.className = "fixed top-5 right-5 bg-red-600 text-white p-4 rounded shadow-lg z-50 transition-opacity duration-500";
-    errorDiv.innerHTML = `
-        <strong>Playback Failed</strong><br>
-        <span class="text-sm">${reason}</span>
-    `;
+    errorDiv.innerHTML = `<strong>Playback Failed</strong><br><span class="text-sm">${reason}</span>`;
     document.body.appendChild(errorDiv);
 
     setTimeout(() => errorDiv.remove(), 5000);
@@ -456,12 +522,11 @@ function handlePlaybackFailure(reason) {
 // --- DIRECT PLAY LOGIC ---
 function playDirect() {
     const url = document.getElementById('direct-input').value.trim();
-    
     if (!url) return alert("Please paste a link first!");
 
     if (url.startsWith("magnet:")) {
         alert("❌ Error: You cannot play a Magnet link directly.\n\nMagnet links must be converted by TorBox/Real-Debrid first. Please log in to add this torrent.");
-        return; 
+        return;
     }
 
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
@@ -470,40 +535,36 @@ function playDirect() {
     }
 
     document.getElementById('auth-screen').classList.add('hidden');
-    
     const cleanName = url.split('/').pop().split('?')[0] || "Direct Stream";
     startPlayer(url, decodeURIComponent(cleanName));
 }
 
 // --- DELETE TORRENT ---
 async function deleteTorrent(torrentId, event) {
-    // Stop the click from opening the movie
-    if (event) event.stopPropagation(); 
-    
+    if (event) event.stopPropagation();
     if (!confirm("Are you sure you want to delete this from TorBox?")) return;
 
     const key = localStorage.getItem('tb_api_key');
     const targetUrl = 'https://api.torbox.app/v1/api/torrents/controltorrent';
 
     try {
-        // Use your smartFetch proxy here!
         const res = await smartFetch(targetUrl, {
             method: 'POST',
-            headers: { 
+            headers: {
                 'Authorization': `Bearer ${key}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
                 torrent_id: torrentId,
-                operation: "delete" // <-- CHANGED TO LOWERCASE!
+                operation: "delete"
             })
         });
 
         const data = await res.json();
-        
+
         if (data.success) {
             alert("Deleted successfully!");
-            refreshLibrary(); 
+            refreshLibrary();
         } else {
             alert("Error: " + data.detail);
         }
@@ -518,7 +579,22 @@ checkAuth();
 
 // Close dropdown when clicking outside
 window.onclick = function (event) {
-    if (!event.target.matches('.w-10') && !event.target.closest('#profile-dropdown')) {
+    if (!event.target.closest('.w-10') && !event.target.closest('#profile-dropdown')) {
         document.getElementById('profile-dropdown').classList.add('hidden');
     }
 }
+
+// -------------------------------------------------------------
+// --- GLOBAL EXPORTS  ---
+// -------------------------------------------------------------
+window.authenticateTorboxUser = authenticateTorboxUser;
+window.playDirect = playDirect;
+window.goHome = goHome;
+window.handleSearch = handleSearch;
+window.handleSearchSubmit = handleSearchSubmit;
+window.toggleProfile = toggleProfile;
+window.logoutTorBox = logoutTorBox;
+window.handleTraktAuth = handleTraktAuth;
+window.closeTraktModal = closeTraktModal;
+window.closePicker = closePicker;
+window.deleteTorrent = deleteTorrent;

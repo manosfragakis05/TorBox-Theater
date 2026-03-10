@@ -57,22 +57,36 @@ export class Demuxer {
     /**
      * @param {Uint8Array} chunk
      * @param {boolean} is_final
-     * @returns {any}
+     * @returns {number}
      */
     parse_chunk(chunk, is_final) {
         const ptr0 = passArray8ToWasm0(chunk, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.demuxer_parse_chunk(this.__wbg_ptr, ptr0, len0, is_final);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return takeFromExternrefTable0(ret[0]);
+        return ret >>> 0;
     }
     reset() {
         wasm.demuxer_reset(this.__wbg_ptr);
     }
 }
 if (Symbol.dispose) Demuxer.prototype[Symbol.dispose] = Demuxer.prototype.free;
+
+/**
+ * @param {number} size
+ * @returns {number}
+ */
+export function alloc_memory(size) {
+    const ret = wasm.alloc_memory(size);
+    return ret >>> 0;
+}
+
+/**
+ * @param {number} ptr
+ * @param {number} size
+ */
+export function free_memory(ptr, size) {
+    wasm.free_memory(ptr, size);
+}
 
 /**
  * @param {Uint8Array} mkv_data
@@ -82,6 +96,19 @@ export function get_mkv_info(mkv_data) {
     const ptr0 = passArray8ToWasm0(mkv_data, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.get_mkv_info(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {number} ptr
+ * @param {number} len
+ * @returns {any}
+ */
+export function get_mkv_info_fast(ptr, len) {
+    const ret = wasm.get_mkv_info_fast(ptr, len);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
