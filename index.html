@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>TorBox Theater</title>
-    
+
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#0f172a">
     <link rel="apple-touch-icon" href="icon-512.png">
@@ -21,7 +21,6 @@
     <div id="auth-screen"
         class="hidden fixed inset-0 bg-slate-900 z-50 flex flex-col justify-center p-6 overflow-y-auto">
         <div class="max-w-md mx-auto w-full">
-
             <div class="text-center mb-8">
                 <h1 class="text-3xl font-bold text-blue-500 mb-2">TorBox Theater</h1>
                 <p class="text-slate-400">Your cloud media, unblocked.</p>
@@ -29,18 +28,15 @@
 
             <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl mb-6">
                 <h2 class="text-xl font-bold text-white mb-4">Connect Cloud</h2>
-
                 <form onsubmit="event.preventDefault(); authenticateTorboxUser();">
                     <input id="api-input" type="password" placeholder="Paste TorBox API Key"
                         autocomplete="one-time-code"
                         class="w-full bg-slate-900 border border-slate-600 p-4 rounded-xl text-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 mb-4 transition-all">
-
                     <button type="submit" id="loggin-btn"
                         class="w-full bg-blue-600 hover:bg-blue-500 font-bold p-4 rounded-xl text-lg transition-all shadow-lg shadow-blue-900/20">
                         Log In
                     </button>
                 </form>
-
                 <p class="text-xs text-center text-slate-500 mt-3">Key stored locally on device.</p>
             </div>
 
@@ -52,11 +48,9 @@
 
             <div class="bg-slate-800/50 p-6 rounded-2xl border border-dashed border-slate-700">
                 <h2 class="text-lg font-bold text-slate-300 mb-4">Paste & Play</h2>
-
                 <form onsubmit="event.preventDefault(); playDirect();" class="flex gap-2">
                     <input id="direct-input" type="text" placeholder="https://..."
                         class="w-full bg-slate-900 border border-slate-600 p-3 rounded-xl outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500">
-
                     <button type="submit"
                         class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 rounded-xl transition-all flex items-center justify-center shadow-lg shadow-blue-900/20">
                         <svg fill="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"
@@ -70,8 +64,8 @@
         </div>
     </div>
 
-    <nav class="sticky top-0 z-40 bg-slate-900/95 backdrop-blur border-b border-slate-900 p-3">
-        <div class="max-w-4xl mx-auto flex items-center justify-between gap-3">
+    <nav class="sticky top-0 z-40 bg-slate-900/95 backdrop-blur border-b border-slate-800 p-3">
+        <div class="max-w-7xl mx-auto flex items-center justify-between gap-3">
 
             <button onclick="goHome()"
                 class="p-2.5 rounded-xl text-slate-400 hover:text-blue-500 hover:bg-slate-800 transition-colors flex-shrink-0">
@@ -85,14 +79,13 @@
             <div class="flex-1 flex gap-2 max-w-lg">
                 <form onsubmit="event.preventDefault(); handleSearchSubmit();" class="relative flex-1">
                     <input id="search-input" type="text" placeholder="Search or Paste Link..." oninput="handleSearch()"
-                        class="w-full bg-slate-800 border border-slate-700 text-white pl-10 pr-4 py-2.5 rounded-xl text-sm focus:ring-2 focus:ring-blue-600 outline-none">
+                        class="w-full bg-slate-800 border border-slate-700 text-white pl-10 pr-4 py-2.5 rounded-xl text-sm focus:ring-2 focus:ring-blue-600 outline-none transition-all">
                     <svg class="absolute left-3 top-3 w-4 h-4 text-slate-400 pointer-events-none" fill="none"
                         stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                             d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
                     </svg>
                 </form>
-
                 <button onclick="handleSearchSubmit()"
                     class="bg-slate-800 border border-slate-700 p-2.5 rounded-xl text-slate-400 active:bg-slate-700 hover:text-white transition flex-shrink-0">
                     <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="size-5">
@@ -119,9 +112,8 @@
                             <span class="w-2 h-2 bg-green-500 rounded-full"></span>
                         </div>
                         <button onclick="logoutTorBox()"
-                            class="w-full text-xs bg-slate-700 hover:bg-red-900/50 text-slate-300 hover:text-red-400 py-2 rounded transition">
-                            Disconnect API
-                        </button>
+                            class="w-full text-xs bg-slate-700 hover:bg-red-900/50 text-slate-300 hover:text-red-400 py-2 rounded transition">Disconnect
+                            API</button>
                     </div>
                     <div>
                         <div class="flex justify-between items-center mb-1">
@@ -129,21 +121,98 @@
                             <span id="trakt-status-dot" class="w-2 h-2 bg-red-500 rounded-full"></span>
                         </div>
                         <button id="trakt-action-btn" onclick="handleTraktAuth()"
-                            class="w-full text-xs bg-slate-700 hover:bg-blue-600 text-slate-300 hover:text-white py-2 rounded transition">
-                            Connect Trakt
-                        </button>
+                            class="w-full text-xs bg-slate-700 hover:bg-blue-600 text-slate-300 hover:text-white py-2 rounded transition">Connect
+                            Trakt</button>
                     </div>
                 </div>
             </div>
-
         </div>
     </nav>
 
-    <div id="player-wrapper" class="hidden w-full bg-black shadow-2xl transition-all duration-300">
-        <div class="max-w-4xl mx-auto">
-            <div class="artplayer-app"></div>
+    <div id="player-wrapper" class="hidden w-full bg-black shadow-2xl transition-all duration-300 z-30 relative">
+        <div class="max-w-7xl mx-auto">
+            <div class="artplayer-app w-full aspect-video"></div>
         </div>
     </div>
+
+    <main class="max-w-7xl mx-auto w-full p-4 pt-6">
+
+        <div class="flex p-1 bg-slate-800/80 backdrop-blur rounded-xl mb-8 shadow-inner border border-slate-700/50">
+            <button id="tab-library" onclick="showLibraryTab()"
+                class="flex-1 py-2.5 rounded-lg bg-blue-600 text-white font-bold text-sm shadow transition-all">My
+                Library</button>
+            <button id="tab-discover" onclick="showDiscoverTab()"
+                class="flex-1 py-2.5 rounded-lg text-slate-400 font-bold text-sm hover:text-white hover:bg-slate-700/50 transition-all">Discover
+                Movies</button>
+        </div>
+
+        <div id="dashboard" class="min-h-[50vh]">
+            <div id="loading" class="text-center text-slate-500 mt-10 hidden">Loading your cloud...</div>
+
+            <div id="file-list" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4"></div>
+
+            <div id="empty-state" class="hidden text-center mt-20 text-slate-500">
+                <p>No files found.</p>
+            </div>
+        </div>
+
+        <div id="discover-tab" class="hidden flex flex-col gap-10">
+
+            <div id="global-search-results"
+                class="hidden bg-slate-800/50 p-4 rounded-xl border border-blue-500/30 shadow-lg shadow-blue-900/10">
+                <h2 class="text-xl font-bold text-blue-400 mb-4 pl-1 flex items-center gap-2">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5">
+                        <path stroke-linecap="round" stroke-linejoin="round"
+                            d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                    </svg>
+                    Search Results
+                </h2>
+                <div id="global-search-grid" class="flex overflow-x-auto gap-4 pb-4 snap-x scrollbar-hide">
+                </div>
+            </div>
+
+            <div>
+                <h2 class="text-xl font-bold text-white mb-4 pl-1">Trending This Week</h2>
+                <div id="trending-row" class="flex overflow-x-auto gap-4 pb-4 snap-x scrollbar-hide"></div>
+            </div>
+
+            <div>
+                <h2 class="text-xl font-bold text-white mb-4 pl-1">In Theaters / New</h2>
+                <div id="new-row" class="flex overflow-x-auto gap-4 pb-4 snap-x scrollbar-hide"></div>
+            </div>
+
+            <div>
+                <h2 class="text-xl font-bold text-white mb-4 pl-1">Action Packed</h2>
+                <div id="action-row" class="flex overflow-x-auto gap-4 pb-4 snap-x scrollbar-hide"></div>
+            </div>
+
+            <div>
+                <h2 class="text-xl font-bold text-white mb-4 pl-1">Comedies</h2>
+                <div id="comedy-row" class="flex overflow-x-auto gap-4 pb-4 snap-x scrollbar-hide"></div>
+            </div>
+
+            <div>
+                <h2 class="text-xl font-bold text-white mb-4 pl-1">Edge of Your Seat (Thrillers)</h2>
+                <div id="thriller-row" class="flex overflow-x-auto gap-4 pb-4 snap-x scrollbar-hide"></div>
+            </div>
+
+            <div>
+                <h2 class="text-xl font-bold text-white mb-4 pl-1">Anime Features</h2>
+                <div id="anime-row" class="flex overflow-x-auto gap-4 pb-4 snap-x scrollbar-hide"></div>
+            </div>
+
+            <div>
+                <h2 class="text-xl font-bold text-white mb-4 pl-1">All-Time Greats</h2>
+                <div id="top-row" class="flex overflow-x-auto gap-4 pb-4 snap-x scrollbar-hide"></div>
+            </div>
+
+            <div>
+                <h2 class="text-xl font-bold text-white mb-4 pl-1">Devs Picks</h2>
+                <div id="my-picks-row" class="flex overflow-x-auto gap-4 pb-4 snap-x scrollbar-hide"></div>
+            </div>
+        </div>
+
+    </main>
 
     <div id="trakt-modal" class="hidden fixed inset-0 z-50 bg-black/90 flex flex-col justify-center p-6 text-center">
         <h2 class="text-2xl font-bold text-blue-500 mb-4">Connect Trakt</h2>
@@ -159,23 +228,116 @@
         <div class="bg-slate-800 rounded-t-xl sm:rounded-xl max-h-[70vh] flex flex-col max-w-lg mx-auto w-full">
             <div class="p-4 border-b border-slate-700 flex justify-between items-center">
                 <h3 id="picker-title" class="font-bold text-lg">Select File</h3>
-                <button onclick="closePicker()" class="p-2 bg-slate-700 rounded-full">✕</button>
+                <button onclick="closePicker()"
+                    class="p-2 bg-slate-700 hover:bg-slate-600 rounded-full transition">✕</button>
             </div>
             <div id="picker-list" class="overflow-y-auto p-2 space-y-1 flex-1"></div>
         </div>
     </div>
 
-    <div id="dashboard" class="p-4 max-w-4xl mx-auto min-h-screen">
-        <div id="loading" class="text-center text-slate-500 mt-10 hidden">Loading your cloud...</div>
-        <div id="file-list" class="space-y-3 mt-2"></div>
-        <div id="empty-state" class="hidden text-center mt-20 text-slate-500">
-            <p>No files found matching that name.</p>
+    <div id="movie-detail-view"
+        class="fixed inset-0 z-[60] bg-slate-900 translate-y-full transition-transform duration-500 ease-in-out overflow-y-auto">
+        <button onclick="closeMovieDetail()"
+            class="fixed top-6 right-6 z-[70] bg-black/50 backdrop-blur-md p-3 rounded-full text-white hover:bg-blue-600 transition">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+        </button>
+
+        <div id="detail-backdrop" class="relative h-[40vh] md:h-[60vh] w-full bg-cover bg-center">
+            <div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent"></div>
+        </div>
+
+        <div class="max-w-7xl mx-auto px-6 -mt-32 relative z-10 pb-20">
+            <div class="flex flex-col md:flex-row gap-8">
+                <div class="w-48 md:w-64 flex-shrink-0 mx-auto md:mx-0">
+                    <img id="detail-poster" src="" class="w-full rounded-2xl shadow-2xl border border-white/10"
+                        alt="Poster">
+                </div>
+
+                <div class="flex-1 text-center md:text-left pt-10 md:pt-32">
+                    <h1 id="detail-title" class="text-4xl md:text-6xl font-black text-white mb-4 leading-tight">Movie
+                        Title</h1>
+
+                    <div
+                        class="flex flex-wrap justify-center md:justify-start items-center gap-4 text-slate-300 mb-6 font-semibold">
+                        <span id="detail-year"
+                            class="bg-slate-800 px-3 py-1 rounded-md text-sm border border-slate-700">Year</span>
+                        <span id="detail-runtime" class="text-sm">Runtime</span>
+                        <span id="detail-rating" class="text-yellow-500 flex items-center gap-1">★ 0.0</span>
+                    </div>
+
+                    <p id="detail-tagline" class="text-blue-400 italic mb-4 text-lg"></p>
+                    <p id="detail-overview" class="text-slate-300 text-lg leading-relaxed max-w-3xl mb-8">Description
+                        goes here...</p>
+
+                    <div class="flex flex-wrap gap-4 justify-center md:justify-start mt-6">
+                        <button id="btn-torrent"
+                            class="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-xl font-bold text-lg transition transform hover:scale-105 shadow-xl shadow-blue-900/20 flex items-center gap-2">
+                            <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z" />
+                            </svg>
+                            Play (High Quality)
+                        </button>
+
+                        <button id="btn-scraper"
+                            class="bg-slate-700 hover:bg-slate-600 text-white px-8 py-3 rounded-xl font-bold text-lg transition transform hover:scale-105 border border-slate-600 flex items-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                            </svg>
+                            Play (Direct Stream)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="iframe-player-view" class="fixed inset-0 z-[80] bg-black/95 hidden overflow-y-auto backdrop-blur-sm">
+
+        <div class="min-h-screen w-full flex flex-col items-center justify-center p-4 md:p-10">
+
+            <div class="w-full max-w-5xl flex justify-between items-center mb-4 z-10 mt-8 md:mt-0">
+                <div class="flex items-center gap-4">
+                    <h3 id="iframe-title"
+                        class="text-white font-bold text-xl drop-shadow-md truncate max-w-[200px] md:max-w-none">Direct
+                        Stream</h3>
+                    <div id="iframe-header-injection-point"></div>
+                </div>
+
+                <button onclick="closeIframePlayer()"
+                    class="bg-slate-800 hover:bg-red-600 text-white p-2.5 rounded-full transition shadow-lg border border-slate-700">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                            d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+
+            <div
+                class="w-full max-w-5xl aspect-video bg-slate-900 md:rounded-xl shadow-[0_0_50px_rgba(0,0,0,0.8)] border-y md:border border-slate-700 relative overflow-hidden flex-shrink-0">
+                <iframe id="scraper-iframe" class="absolute inset-0 w-full h-full border-none bg-black" scrolling="no"
+                    allowfullscreen></iframe>
+            </div>
+
+            <div class="mt-6 max-w-3xl text-center px-4 mb-8">
+                <p class="text-slate-400 text-sm font-semibold mb-1">
+                    ⚠️ Note: These streams are hosted by third-party servers, not by Theater.
+                </p>
+                <p class="text-slate-500 text-xs leading-relaxed">
+                    We have no control over the quality, buffering, or ads shown by these providers. Because these are
+                    free public servers, they may contain aggressive popup ads or hidden overlays. <br>
+                    <span class="text-blue-400 font-semibold mt-2 inline-block">For the best, ad-free experience, we
+                        highly recommend viewing this app through the Brave Browser or using an ad-blocker.</span>
+                </p>
+            </div>
+
         </div>
     </div>
 
     <script type="module" src="script.js"></script>
     <script>
-        // Register the PWA Service Worker
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('./sw.js')

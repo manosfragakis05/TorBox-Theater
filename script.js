@@ -1,16 +1,16 @@
-import { feed, playMKV } from './mkv-remux-tool/mkv_lib.js';
+import { art, requestLink, startPlayer, playDirect, clearPlayerInstance } from './player.js';
+import { loadDiscover } from './api.js';
+import { getPosterForLibrary } from './api.js';
 
-let art = null;
 let allTorrents = [];
-let currentStreamUrl = "";
 let currentTorrentId = null;
 
-const TRAKT_CLIENT_ID = '027c95542a22d861d8a4e82b7535560b457639527f09b5526315682c611488c9';
+export const TRAKT_CLIENT_ID = '027c95542a22d861d8a4e82b7535560b457639527f09b5526315682c611488c9';
 // PASTE YOUR CLOUDFLARE URL BELOW (keep the /?url= at the end!)
-const MY_PROXY = "https://torrent-proxy.manosfragakis05.workers.dev/?url=";
+export const MY_PROXY = "https://bt-kd-8478.manosfragakis05.workers.dev/?url=";
 
 // --- THE CLOUDFLARE TUNNEL ---
-async function smartFetch(targetUrl, options = {}) {
+export async function smartFetch(targetUrl, options = {}) {
     return fetch(MY_PROXY + encodeURIComponent(targetUrl), options);
 }
 
@@ -73,8 +73,10 @@ function checkAuth() {
     }
 }
 
+checkAuth();
+
 function toggleProfile(event) {
-    if (event) event.stopPropagation(); // Fixed the SVG click bug!
+    if (event) event.stopPropagation();
     const menu = document.getElementById('profile-dropdown');
     menu.classList.toggle('hidden');
 }
@@ -88,10 +90,10 @@ function logoutTorBox() {
 
 // --- NAVIGATION ---
 function goHome() {
-    // Stop the movie and hide the player
+    // Stop the movie and hide the player safely
     if (art) {
         art.destroy();
-        art = null;
+        clearPlayerInstance(); // Used our new helper instead of art = null
     }
     document.getElementById('player-wrapper').classList.add('hidden');
     document.getElementById('search-input').value = '';
@@ -122,7 +124,7 @@ async function loadLibrary(key) {
     } catch (e) { alert("Network Error"); }
 }
 
-function renderList(items) {
+export function renderList(items) {
     const list = document.getElementById('file-list');
     list.innerHTML = '';
 
@@ -132,37 +134,71 @@ function renderList(items) {
     }
     document.getElementById('empty-state').classList.add('hidden');
 
-    items.forEach(t => {
-        const card = document.createElement('div');
-        card.className = "movie-card bg-slate-800 p-4 rounded-xl border border-slate-700/50 cursor-pointer flex justify-between items-center";
-
+    items.forEach(async (t) => {
         const vidCount = t.files.filter(f => f.name.match(/\.(mkv|mp4|avi|mov)$/i)).length;
-        const label = vidCount > 1 ? `${vidCount} Episodes` : 'Movie';
+        const isShow = vidCount > 1;
 
+        // 1. THE TORRENT TITLE CLEANER
+        // Replace dots with spaces
+        let cleanName = t.name.replace(/[\._]/g, ' '); 
+        
+        // Extract the year if it exists (e.g., 1999 or 2022)
+        const yearMatch = cleanName.match(/\b(19\d{2}|20\d{2})\b/);
+        const year = yearMatch ? yearMatch[0] : '';
+        
+        // Ruthlessly chop off everything from the year/resolution onwards
+        // We added s\d{2}e\d{2} (which catches S03E06) and 'season' to the chop list!
+        cleanName = cleanName.replace(/\b(s\d{2}e\d{2}|s\d{2}|season \d|episode \d|19\d{2}|20\d{2}|1080p|720p|2160p|4k|bluray|web-dl|webrip|hdrip|cam|ts|x264|x265|hevc|remux|h264|h265)\b.*$/i, '');
+        cleanName = cleanName.replace(/[\(\)\[\]\-]/g, '').trim(); // Remove random brackets
+
+        // 2. Build the visual card (Starts with a gray placeholder)
+        const card = document.createElement('div');
+        card.className = "relative flex-col cursor-pointer transition-transform hover:scale-105 select-none group";
+
+        // We use a dark gradient overlay so the white text is always readable over the poster
         card.innerHTML = `
-            <div class="overflow-hidden">
-                <h3 class="font-bold text-slate-100 truncate pr-4">${t.name}</h3>
-                <p class="text-xs text-slate-400">${(t.size / 1073741824).toFixed(2)} GB • ${label}</p>
-            </div>
-            <div class="flex items-center gap-3">
-                <button onclick="deleteTorrent(${t.id}, event)" class="text-red-500 hover:bg-red-500/20 p-2 rounded-full transition-colors z-10">
-                    🗑️
-                </button>
-                <div class="text-blue-500 bg-blue-500/10 p-2 rounded-full">
-                    ${vidCount > 1 ? '☰' : '▶'}
+            <div class="relative w-full aspect-[2/3] bg-slate-800 rounded-lg shadow-lg overflow-hidden border border-slate-700/50">
+                <img id="img-${t.id}" src="" class="absolute inset-0 w-full h-full object-cover hidden" draggable="false">
+                
+                <div id="fallback-${t.id}" class="absolute inset-0 flex items-center justify-center p-4 text-center text-slate-500 font-bold text-sm bg-slate-800">
+                    ${cleanName}
+                </div>
+
+                <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-white font-bold text-xs truncate drop-shadow-md">${isShow ? '📺 Series' : '🎬 Movie'}</span>
+                        <button onclick="deleteTorrent(${t.id}, event)" class="text-red-500 hover:text-red-400 p-1 bg-black/50 rounded-full transition z-10">🗑️</button>
+                    </div>
+                </div>
+                
+                <div class="absolute top-2 right-2 bg-blue-600/90 text-white text-[10px] font-bold px-2 py-1 rounded backdrop-blur shadow-lg">
+                    ${(t.size / 1073741824).toFixed(1)} GB
                 </div>
             </div>
+            <p class="text-xs text-slate-300 mt-2 truncate font-semibold pl-1">${cleanName}</p>
         `;
 
         card.onclick = () => {
-            if (vidCount > 1) {
+            if (isShow) {
                 openPicker(t);
             } else {
                 const vid = t.files.find(f => f.name.match(/\.(mkv|mp4|avi|mov)$/i)) || t.files[0];
-                requestLink(t.id, vid.id, t.name, vid.name);
+                import('./player.js').then(m => m.requestLink(t.id, vid.id, t.name, vid.name));
             }
         };
+        
         list.appendChild(card);
+
+        // 3. Silently fetch the poster in the background!
+        const posterUrl = await getPosterForLibrary(cleanName, year);
+        if (posterUrl) {
+            const imgElement = document.getElementById(`img-${t.id}`);
+            const fallbackElement = document.getElementById(`fallback-${t.id}`);
+            
+            imgElement.src = posterUrl;
+            imgElement.classList.remove('hidden'); // Show the poster
+            fallbackElement.classList.add('hidden'); // Hide the raw text
+        }
     });
 }
 
@@ -190,7 +226,7 @@ function openPicker(torrent) {
         btn.innerHTML = `<span class="text-blue-400">▶</span><span class="text-sm text-slate-200">${file.name}</span>`;
         btn.onclick = () => {
             closePicker();
-            requestLink(currentTorrentId, file.id, torrent.name, file.name);
+            requestLink(currentTorrentId, file.id, torrent.name, file.name); // Using the imported function
         };
         list.appendChild(btn);
     });
@@ -266,7 +302,7 @@ function closeTraktModal() {
     document.getElementById('trakt-modal').classList.add('hidden');
 }
 
-async function scrobble(action, movieName, progress) {
+export async function scrobble(action, movieName, progress) {
     const token = localStorage.getItem('trakt_token');
     if (!token) return;
 
@@ -293,13 +329,31 @@ async function scrobble(action, movieName, progress) {
 }
 
 // --- SEARCH ---
-function handleSearch() {
+let searchTimeout = null;
+
+export function handleSearch() {
     const query = document.getElementById('search-input').value.toLowerCase().trim();
 
-    if (query.startsWith('http') || query.startsWith('magnet:')) return;
+    if (query.startsWith('http') || query.startsWith('magnet:')) {
+        document.getElementById('global-search-results').classList.add('hidden');
+        return;
+    }
 
     const filtered = allTorrents.filter(t => t.name.toLowerCase().includes(query));
     renderList(filtered);
+
+    clearTimeout(searchTimeout);
+    
+    if (query.length >= 3) {
+        // Switch to the 1-second (1000ms) delay
+        searchTimeout = setTimeout(() => {
+            // Auto-switch to the discover tab for the best viewing experience!
+            showDiscoverTab(); 
+            import('./api.js').then(module => module.searchTMDB(query));
+        }, 1000); 
+    } else {
+        document.getElementById('global-search-results').classList.add('hidden');
+    }
 }
 
 function handleSearchSubmit() {
@@ -308,7 +362,7 @@ function handleSearchSubmit() {
 
     if (query.startsWith('http://') || query.startsWith('https://')) {
         inputField.blur();
-        startPlayer(query, "Direct Stream");
+        startPlayer(query, "Direct Stream"); // Using the imported function
         return;
     }
 
@@ -329,214 +383,6 @@ function handleSearchSubmit() {
     }
 
     inputField.blur();
-}
-
-// --- PLAYER ---
-async function requestLink(tid, fid, torrentName, fileName) {
-    const key = localStorage.getItem('tb_api_key');
-    const list = document.getElementById('file-list');
-    list.style.opacity = '0.5';
-
-    try {
-        const targetUrl = `https://api.torbox.app/v1/api/torrents/requestdl?token=${key}&torrent_id=${tid}&file_id=${fid}&zip=false`;
-        const res = await smartFetch(targetUrl);
-        const data = await res.json();
-
-        if (data.success) {
-            startPlayer(data.data, fileName || torrentName);
-        } else {
-            alert("Link Error: " + data.detail);
-        }
-    } catch (e) {
-        alert("Error requesting link.");
-    } finally {
-        list.style.opacity = '1';
-    }
-}
-
-
-function startPlayer(url, name) {
-    currentStreamUrl = url;
-    document.getElementById('player-wrapper').classList.remove('hidden');
-
-    if (art) art.destroy();
-
-    const isMkv = name.toLowerCase().endsWith('.mkv') || url.toLowerCase().split('?')[0].endsWith('.mkv');
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-    const videoType = (isMkv && isIOS) ? 'wasm_mkv' : 'auto';
-
-    // --- 1. DIET ARTPLAYER CONFIGURATION ---
-    art = new Artplayer({
-        container: '.artplayer-app',
-        url: url,
-        title: name,
-        type: videoType,
-        autoSize: false,
-        playsInline: true,
-        fullscreen: true,
-        fullscreenWeb: true,
-        setting: true,
-        lock: true,
-        fastForward: true,
-        theme: '#3b82f6',
-        pip: true,
-        autoPlayback: true,
-
-        // CPU SAVERS (Prevents DOM Thrashing)
-        miniProgressBar: false,
-        screenshot: false,
-        subtitleOffset: false,
-        playbackRate: false,
-
-        customType: {
-            wasm_mkv: async function (videoElement, artUrl, art) {
-                console.log("🍎 iOS/Forced MKV Detected! Booting WebAssembly Engine...");
-                art.notice.show = "Booting Engine...";
-                try {
-                    // Start by playing the default track (Index 0)
-                    await playMKV(artUrl, videoElement, 0);
-                } catch (error) {
-                    console.error("Engine Crash:", error);
-                    art.notice.show = "Error: Engine failed to decode this MKV.";
-                }
-            }
-        },
-    });
-
-    art.on('video:error', () => {
-        console.log("❌ Player Error Detected!");
-        handlePlaybackFailure("Format not supported or link is dead.");
-    });
-
-    // Trakt Scrobbling
-    art.on('play', () => { scrobble('start', name, 0); });
-    art.on('pause', () => { scrobble('stop', name, art.currentTime / art.duration * 100); });
-    art.on('destroy', () => { scrobble('stop', name, art.currentTime / art.duration * 100); });
-
-    art.play();
-
-    // --- 2. THE APPLE BYPASS ---
-    art.on('ready', () => {
-        if (isIOS) {
-            console.log("🍎 iPhone detected. Hijacking the Fullscreen button...");
-            art.controls.update({
-                name: 'fullscreen',
-                click: function () {
-                    art.fullscreenWeb = !art.fullscreenWeb;
-                    if (art.fullscreenWeb) art.notice.show = "Switched to Web Fullscreen";
-                }
-            });
-        }
-    });
-
-    // --- 3. THE POLITE SCOUT (Phantom Audio UI Version) ---
-    let scoutSent = false;
-    art.on('video:playing', async () => {
-        if (isMkv && !scoutSent) {
-            scoutSent = true;
-            console.log("🕵️ Native video is playing! Bandwidth is free. Sending Scout...");
-
-            try {
-                const engine = await feed(url);
-
-                if (engine.audioTracks && engine.audioTracks.length > 1) {
-                    console.log(`🎧 Found ${engine.audioTracks.length} tracks! Adding menu...`);
-
-                    const langMap = {
-                        'eng': 'English', 'gr': 'Greek', 'jpn': 'Japanese', 'spa': 'Spanish',
-                        'fre': 'French', 'ger': 'German', 'ita': 'Italian', 'und': 'Unknown'
-                    };
-
-                    const trackOptions = engine.audioTracks.map((t, index) => {
-                        let langName = langMap[t.language] || (index === 0 ? 'Primary' : `Track ${t.track_number}`);
-                        const codecName = t.codec_string ? ` (${t.codec_string})` : '';
-
-                        return {
-                            html: `${langName}${codecName}`,
-                            // CRITICAL CHANGE: We pass the actual MKV Track ID to the engine, not the array index!
-                            trackNumber: t.track_number,
-                            default: index === 0
-                        };
-                    });
-
-                    art.setting.add({
-                        html: 'Audio Track',
-                        tooltip: trackOptions[0].html,
-                        selector: trackOptions,
-                        onSelect: async function (item) {
-                            art.notice.show = `Swapping audio...`;
-
-                            // 1. Save our current state
-                            const savedTime = art.currentTime;
-                            const wasPlaying = art.playing;
-
-                            // 2. Tell the engine to swap the track internally
-                            await engine.switchAudioTrack(item.trackNumber);
-
-                            // 3. THE HIJACK: If we are playing Natively, force the WASM engine!
-                            if (engine.video !== art.video) {
-                                console.log("🎬 Hijacking Native Player -> Switching to WASM Engine...");
-
-                                // Attach the custom engine to the video tag
-                                await playMKV(url, art.video);
-
-                                // Wait for the WASM engine to pipe the first frame, then jump!
-                                const restoreVideo = () => {
-                                    art.currentTime = savedTime;
-                                    if (wasPlaying) art.play();
-                                    art.video.removeEventListener('loadeddata', restoreVideo);
-                                };
-
-                                art.video.addEventListener('loadeddata', restoreVideo);
-                            }
-
-                            return item.html;
-                        }
-                    });
-                }
-            } catch (e) {
-                console.warn("Scout failed to read tracks:", e);
-            }
-        }
-    });
-
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-}
-
-function handlePlaybackFailure(reason) {
-    if (!art) return;
-    art.destroy();
-    art = null;
-
-    document.getElementById('player-wrapper').classList.add('hidden');
-
-    const errorDiv = document.createElement('div');
-    errorDiv.className = "fixed top-5 right-5 bg-red-600 text-white p-4 rounded shadow-lg z-50 transition-opacity duration-500";
-    errorDiv.innerHTML = `<strong>Playback Failed</strong><br><span class="text-sm">${reason}</span>`;
-    document.body.appendChild(errorDiv);
-
-    setTimeout(() => errorDiv.remove(), 5000);
-}
-
-// --- DIRECT PLAY LOGIC ---
-function playDirect() {
-    const url = document.getElementById('direct-input').value.trim();
-    if (!url) return alert("Please paste a link first!");
-
-    if (url.startsWith("magnet:")) {
-        alert("❌ Error: You cannot play a Magnet link directly.\n\nMagnet links must be converted by TorBox/Real-Debrid first. Please log in to add this torrent.");
-        return;
-    }
-
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-        alert("❌ Error: Invalid Link.");
-        return;
-    }
-
-    document.getElementById('auth-screen').classList.add('hidden');
-    const cleanName = url.split('/').pop().split('?')[0] || "Direct Stream";
-    startPlayer(url, decodeURIComponent(cleanName));
 }
 
 // --- DELETE TORRENT ---
@@ -574,8 +420,44 @@ async function deleteTorrent(torrentId, event) {
     }
 }
 
-// Init
-checkAuth();
+// --- TAB NAVIGATION UI ---
+// --- TAB NAVIGATION UI ---
+export function showLibraryTab() {
+    // 1. Swap the content
+    document.getElementById('discover-tab').classList.add('hidden');
+    document.getElementById('dashboard').classList.remove('hidden');
+
+    // 2. Light up the Library button (Blue)
+    const libBtn = document.getElementById('tab-library');
+    libBtn.className = "flex-1 py-2.5 rounded-lg bg-blue-600 text-white font-bold text-sm shadow transition-all";
+
+    // 3. Dim the Discover button (Gray)
+    const discBtn = document.getElementById('tab-discover');
+    discBtn.className = "flex-1 py-2.5 rounded-lg text-slate-400 font-bold text-sm hover:text-white hover:bg-slate-700/50 transition-all";
+}
+
+export function showDiscoverTab() {
+    // 1. Swap the content
+    document.getElementById('dashboard').classList.add('hidden');
+    document.getElementById('discover-tab').classList.remove('hidden');
+    
+    // 2. Light up the Discover button (Blue)
+    const discBtn = document.getElementById('tab-discover');
+    discBtn.className = "flex-1 py-2.5 rounded-lg bg-blue-600 text-white font-bold text-sm shadow transition-all";
+
+    // 3. Dim the Library button (Gray)
+    const libBtn = document.getElementById('tab-library');
+    libBtn.className = "flex-1 py-2.5 rounded-lg text-slate-400 font-bold text-sm hover:text-white hover:bg-slate-700/50 transition-all";
+    
+    // Only fetch from the API if the grid is empty!
+    if (document.getElementById('trending-row').innerHTML.trim() === '') {
+        import('./api.js').then(module => module.loadDiscover());
+    }
+}
+
+// Attach to the window object so your HTML buttons can trigger them
+window.showLibraryTab = showLibraryTab;
+window.showDiscoverTab = showDiscoverTab;
 
 // Close dropdown when clicking outside
 window.onclick = function (event) {
