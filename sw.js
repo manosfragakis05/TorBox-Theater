@@ -4,8 +4,10 @@ const ASSETS = [
     './index.html',
     './script.js',
     './style.css',
-    './mkv_demuxer.js',
-    './mkv_demuxer_bg.wasm'
+
+    './engine/mkv_lib.js',
+    './engine/streaming-engine.js',
+    './engine/streaming_engine.wasm'
 ];
 
 // Install: Cache the UI Shell and force update
@@ -36,7 +38,7 @@ self.addEventListener('activate', (event) => {
 // Fetch: Serve UI from cache, let API and Videos pass through
 self.addEventListener('fetch', (event) => {
     if (!event.request.url.startsWith(self.location.origin)) {
-        return; 
+        return;
     }
     event.respondWith(
         caches.match(event.request).then((cachedResponse) => {

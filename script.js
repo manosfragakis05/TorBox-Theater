@@ -1,30 +1,128 @@
-import { art, requestLink, startPlayer, playDirect, clearPlayerInstance } from './player.js';
-import { loadDiscover } from './api.js';
-import { getPosterForLibrary } from './api.js';
+import { parse } from 'https://cdn.jsdelivr.net/npm/parse-torrent-title@2.1.0/+esm';
+
+import { art, startPlayer, playDirect, clearPlayerInstance } from './player.js';
+import { getPosterForLibrary, TMDB_KEY } from './api.js';
 
 let allTorrents = [];
 let currentTorrentId = null;
+let clickCooldown = false;
 
 export const TRAKT_CLIENT_ID = '027c95542a22d861d8a4e82b7535560b457639527f09b5526315682c611488c9';
 // PASTE YOUR CLOUDFLARE URL BELOW (keep the /?url= at the end!)
 export const MY_PROXY = "https://bt-kd-8478.manosfragakis05.workers.dev/?url=";
 
-// --- THE CLOUDFLARE TUNNEL ---
+
+//#region Global functions
+
+// Cloudflare Proxy
 export async function smartFetch(targetUrl, options = {}) {
     return fetch(MY_PROXY + encodeURIComponent(targetUrl), options);
 }
 
-// --- AUTH & PROFILE ---
-function isLoggedIn() {
-    return !!localStorage.getItem('tb_api_key');
+// GLOBAL PTT CLEANER
+export function parseMediaData(rawString) {
+    // 0. THE IRONCLAD EXTRACTOR: Lock in the S/E numbers before PTT gets confused
+    let explicitSeason = null;
+    let explicitEpisode = null;
+    const strictMatch = rawString.match(/[sS](\d{1,3})[\.\-\s]?[eE](\d{1,4})/i);
+    if (strictMatch) {
+        explicitSeason = parseInt(strictMatch[1], 10);
+        explicitEpisode = parseInt(strictMatch[2], 10);
+    }
+
+    // 1. THE PRE-WASH: Nuke uploader tags, extensions, and weird characters
+    let preWashed = rawString
+        .replace(/^\[.*?\]\s*/g, '')  // Kills [SubsPlease], [Erai-raws], etc.
+        .replace(/^\(.*?\)\s*/g, '')  // Kills leading parentheses 
+        .replace(/^[^a-zA-Z0-9]+/g, '') // Kills leading dashes or punctuation
+        .replace(/\.(mkv|mp4|avi|mov)$/i, '') // Kills file extensions
+        .replace(/[\._]/g, ' ')       // Converts dots and underscores to spaces
+        .trim();
+
+    // 2. THE ANIME TRANSLATOR
+    preWashed = preWashed.replace(/\s-\s0*(\d{1,4})(v\d)?(\s|\[|\(|$)/i, ' S01E$1$3');
+    preWashed = preWashed.replace(/\b[eE][pP]?\s*0*(\d{1,4})(v\d)?(\s|\[|\(|$)/i, ' S01E$1$3');
+
+    // 3. Feed it to PTT
+    const parsed = parse(preWashed);
+
+    // 4. THE TITLE POWER-WASHER
+    let finalTitle = parsed.title || preWashed;
+    finalTitle = finalTitle.split(/[\[\(]/)[0];
+    finalTitle = finalTitle.replace(/\sS\d+E\d+.*$/i, '');
+    finalTitle = finalTitle.replace(/\s+-\s+\d+.*$/, '');
+    finalTitle = finalTitle.replace(/[\s\-\.]+$/, '').trim();
+
+    // 5. SMART OVERRIDES (This fixes Mr. Robot!)
+    let finalSeason = explicitSeason || parsed.season;
+    let finalEpisode = explicitEpisode || parsed.episode;
+    
+    // Anime fallback
+    if (finalEpisode && !finalSeason) {
+        finalSeason = 1; 
+    }
+
+    return {
+        ...parsed, 
+        title: finalTitle,
+        year: parsed.year || '',
+        season: finalSeason,
+        episode: finalEpisode,
+        resolution: parsed.resolution || 'HD',
+        isComplete: rawString.toLowerCase().includes('complete') || rawString.toLowerCase().includes('season')
+    };
 }
 
+// GLOBAL NOTIFICATION UI
+export function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+
+    // Set colors and icons based on the type
+    let bgColors = "bg-blue-600 border-blue-500";
+    let icon = 'ℹ️';
+
+    if (type === 'success') {
+        bgColors = "bg-emerald-700 border-emerald-500";
+        icon = '✅';
+    } else if (type === 'error') {
+        bgColors = "bg-red-700 border-red-500";
+        icon = '❌';
+    }
+
+    // Modern, sliding, premium UI
+    toast.className = `fixed top-5 right-5 ${bgColors} text-white border p-4 rounded-xl shadow-2xl z-[9999] transition-all duration-300 transform translate-y-[-20px] opacity-0 flex items-center gap-3 backdrop-blur-md`;
+
+    toast.innerHTML = `
+        <span class="text-xl drop-shadow-md">${icon}</span> 
+        <span class="text-sm font-bold tracking-wide leading-tight">${message}</span>
+    `;
+
+    document.body.appendChild(toast);
+
+    // 1. Animate In
+    requestAnimationFrame(() => {
+        toast.classList.remove('translate-y-[-20px]', 'opacity-0');
+        toast.classList.add('translate-y-0', 'opacity-100');
+    });
+
+    // 2. Wait 3 seconds, Animate Out, then Delete
+    setTimeout(() => {
+        toast.classList.remove('translate-y-0', 'opacity-100');
+        toast.classList.add('translate-y-[-20px]', 'opacity-0');
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+window.showToast = showToast;
+//#endregion
+
+//#region TorBox Auth
 async function authenticateTorboxUser() {
     const input = document.getElementById('api-input');
     const button = document.getElementById('loggin-btn');
     const key = input.value.trim();
 
-    if (!key) return alert("Please enter an API key.");
+    if (!key) return showToast("Please enter an API key.", 'error');
 
     button.innerText = "Verifying...";
     button.disabled = true;
@@ -52,7 +150,7 @@ async function authenticateTorboxUser() {
         }
 
     } catch (e) {
-        alert("Authentication Failed: " + e.message);
+        showToast("Authentication Failed: " + e.message, 'error');
         button.innerText = "Log In";
         button.disabled = false;
         input.disabled = false;
@@ -69,7 +167,7 @@ function checkAuth() {
     } else {
         authScreen.classList.add('hidden');
         loadLibrary(key);
-        initTrakt();
+        //initTrakt();
     }
 }
 
@@ -88,17 +186,46 @@ function logoutTorBox() {
     }
 }
 
-// --- NAVIGATION ---
-function goHome() {
-    // Stop the movie and hide the player safely
-    if (art) {
-        art.destroy();
-        clearPlayerInstance(); // Used our new helper instead of art = null
+// UNIVERSAL MEDIA KILLER
+export function stopPlayback() {
+    // 1. Throw the Kill Switch
+    window.abortPlayback = true;
+
+    // 2. The Bulldozer
+    try {
+        if (typeof art !== 'undefined' && art) {
+            if (art.mkvEngine && typeof art.mkvEngine.destroy === 'function') {
+                console.log("🧨 Nuking MKV Engine...");
+                art.mkvEngine.destroy();
+                art.mkvEngine = null;
+            }
+            art.pause();
+            art.destroy(true);
+            clearPlayerInstance(); // Assuming this is imported/available!
+        }
+    } catch (e) {
+        console.log("Player destruction bypassed or already dead.");
     }
+
+    // 3. The DOM Nuke
+    document.querySelectorAll('video, audio').forEach(media => {
+        try {
+            media.pause();
+            media.removeAttribute('src');
+            media.src = '';
+            media.load();
+            media.remove();
+        } catch (e) { }
+    });
+}
+
+// 🏠 THE CLEANED UP GOHOME
+export function goHome() {
+    stopPlayback(); // 👈 Instantly kills everything
+
     document.getElementById('player-wrapper').classList.add('hidden');
     document.getElementById('search-input').value = '';
 
-    // Show library again
     refreshLibrary();
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -119,9 +246,9 @@ async function loadLibrary(key) {
             allTorrents = data.data.filter(t => t.download_finished);
             renderList(allTorrents);
         } else {
-            alert("Error: " + data.detail);
+            showToast("Error: " + data.detail, 'error');
         }
-    } catch (e) { alert("Network Error"); }
+    } catch (e) { showToast("Network Error", 'error'); }
 }
 
 export function renderList(items) {
@@ -134,28 +261,27 @@ export function renderList(items) {
     }
     document.getElementById('empty-state').classList.add('hidden');
 
+    // 🛑 CRITICAL FIX 1: You must define and open the vault here!
+    const vault = JSON.parse(localStorage.getItem('tmdb_vault') || '{}');
+
     items.forEach(async (t) => {
         const vidCount = t.files.filter(f => f.name.match(/\.(mkv|mp4|avi|mov)$/i)).length;
         const isShow = vidCount > 1;
 
-        // 1. THE TORRENT TITLE CLEANER
-        // Replace dots with spaces
-        let cleanName = t.name.replace(/[\._]/g, ' '); 
-        
-        // Extract the year if it exists (e.g., 1999 or 2022)
-        const yearMatch = cleanName.match(/\b(19\d{2}|20\d{2})\b/);
-        const year = yearMatch ? yearMatch[0] : '';
-        
-        // Ruthlessly chop off everything from the year/resolution onwards
-        // We added s\d{2}e\d{2} (which catches S03E06) and 'season' to the chop list!
-        cleanName = cleanName.replace(/\b(s\d{2}e\d{2}|s\d{2}|season \d|episode \d|19\d{2}|20\d{2}|1080p|720p|2160p|4k|bluray|web-dl|webrip|hdrip|cam|ts|x264|x265|hevc|remux|h264|h265)\b.*$/i, '');
-        cleanName = cleanName.replace(/[\(\)\[\]\-]/g, '').trim(); // Remove random brackets
+        // Get clean info from PTT
+        const mediaInfo = parseMediaData(t.name);
+        const cleanName = mediaInfo.title;
+        const year = mediaInfo.year;
 
-        // 2. Build the visual card (Starts with a gray placeholder)
+        // Check Locally
+        const hash = (t.hash || "").toLowerCase();
+        let vaultData = vault[hash];
+
+        // Build the visual card (Starts with a gray placeholder)
         const card = document.createElement('div');
         card.className = "relative flex-col cursor-pointer transition-transform hover:scale-105 select-none group";
 
-        // We use a dark gradient overlay so the white text is always readable over the poster
+        // 🛑 CRITICAL FIX 2: Added event.stopPropagation() to the delete button so it doesn't trigger playback!
         card.innerHTML = `
             <div class="relative w-full aspect-[2/3] bg-slate-800 rounded-lg shadow-lg overflow-hidden border border-slate-700/50">
                 <img id="img-${t.id}" src="" class="absolute inset-0 w-full h-full object-cover hidden" draggable="false">
@@ -167,7 +293,7 @@ export function renderList(items) {
                 <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
                     <div class="flex justify-between items-center mb-1">
                         <span class="text-white font-bold text-xs truncate drop-shadow-md">${isShow ? '📺 Series' : '🎬 Movie'}</span>
-                        <button onclick="deleteTorrent(${t.id}, event)" class="text-red-500 hover:text-red-400 p-1 bg-black/50 rounded-full transition z-10">🗑️</button>
+                        <button onclick="event.stopPropagation(); deleteTorrent(${t.id}, event);" class="text-red-500 hover:text-red-400 p-1 bg-black/50 rounded-full transition z-10">🗑️</button>
                     </div>
                 </div>
                 
@@ -179,25 +305,57 @@ export function renderList(items) {
         `;
 
         card.onclick = () => {
+            if (clickCooldown) {
+                showToast("Please wait a moment.");
+                return;
+            }
+            clickCooldown = true;
+            setTimeout(() => clickCooldown = false, 2000);
+
             if (isShow) {
-                openPicker(t);
+                openPicker(t, vaultData ? vaultData.id : null);
             } else {
                 const vid = t.files.find(f => f.name.match(/\.(mkv|mp4|avi|mov)$/i)) || t.files[0];
                 import('./player.js').then(m => m.requestLink(t.id, vid.id, t.name, vid.name));
             }
         };
-        
+
         list.appendChild(card);
 
-        // 3. Silently fetch the poster in the background!
-        const posterUrl = await getPosterForLibrary(cleanName, year);
-        if (posterUrl) {
-            const imgElement = document.getElementById(`img-${t.id}`);
-            const fallbackElement = document.getElementById(`fallback-${t.id}`);
+        // INSTANT POSTER LOADING
+        const imgElement = document.getElementById(`img-${t.id}`);
+        const fallbackElement = document.getElementById(`fallback-${t.id}`);
+
+        if (vaultData && vaultData.poster) {
+            // INSTANT LOAD: We already know the exact poster from when they clicked "Add"
+            imgElement.src = vaultData.poster;
+            imgElement.classList.remove('hidden');
+            fallbackElement.classList.add('hidden');
+        } else {
+            // FALLBACK: Not in vault. Do the slow text search...
+            const fetchedData = await getPosterForLibrary(cleanName, year);
             
-            imgElement.src = posterUrl;
-            imgElement.classList.remove('hidden'); // Show the poster
-            fallbackElement.classList.add('hidden'); // Hide the raw text
+            // Safely handle both string and object returns just in case api.js isn't updated yet!
+            const finalPoster = typeof fetchedData === 'string' ? fetchedData : (fetchedData?.poster);
+
+            if (finalPoster) {
+                imgElement.src = finalPoster;
+                imgElement.classList.remove('hidden');
+                fallbackElement.classList.add('hidden');
+                
+                // 🧠 THE MISSING HYBRID MAGIC: Save it to the vault so we NEVER do this slow fetch again!
+                if (typeof fetchedData === 'object' && fetchedData.id) {
+                    vault[hash] = { 
+                        id: fetchedData.id, 
+                        type: fetchedData.type, 
+                        poster: fetchedData.poster 
+                    };
+                    localStorage.setItem('tmdb_vault', JSON.stringify(vault));
+                    
+                    // Attach it to 'vaultData' right now so the Episode Picker can use it!
+                    vaultData = vault[hash];
+                }
+            }
         }
     });
 }
@@ -207,99 +365,148 @@ function refreshLibrary() {
     if (key) loadLibrary(key);
 }
 
-// --- FILE PICKER ---
-function openPicker(torrent) {
+// The correct names from TMDB
+export async function getTmdbSeasonData(tmdbId, cleanName, seasonNum = 1) {
+    try {
+        let finalId = tmdbId;
+
+        // 1. THE FALLBACK: If we don't have an ID, search TMDB using the clean name
+        if (!finalId && cleanName) {
+            const searchUrl = `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_KEY}&query=${encodeURIComponent(cleanName)}&page=1`;
+            const searchRes = await fetch(searchUrl);
+            const searchData = await searchRes.json();
+
+            if (searchData.results && searchData.results.length > 0) {
+                finalId = searchData.results[0].id;
+            }
+        }
+
+        // 2. THE FAILSAFE: If the search found absolutely nothing, bail out safely
+        if (!finalId) {
+            console.warn(`TMDB Search failed to find an ID for: ${cleanName}`);
+            return null; 
+        }
+
+        // 3. THE PAYLOAD: We have an ID! Go get the official Season Pack
+        const seasonUrl = `https://api.themoviedb.org/3/tv/${finalId}/season/${seasonNum}?api_key=${TMDB_KEY}`;
+        const seasonRes = await fetch(seasonUrl);
+        const seasonData = await seasonRes.json();
+
+        // This object contains the `.episodes` array with all the official names and image hashes!
+        return seasonData;
+
+    } catch (error) {
+        console.error("Network error fetching TMDB season pack:", error);
+        return null;
+    }
+}
+
+// Episode Table
+// 🛑 Make sure you add 'async' here!
+async function openPicker(torrent, tmdbId) {
     const picker = document.getElementById('file-picker');
     const list = document.getElementById('picker-list');
     const title = document.getElementById('picker-title');
 
-    title.innerText = torrent.name.substring(0, 30) + "...";
-    list.innerHTML = '';
+    title.innerText = torrent.name;
+    picker.classList.remove('hidden');
     currentTorrentId = torrent.id;
+
+    // 🌟 PREMIUM LOADING UI
+    list.innerHTML = `
+        <div class="flex items-center justify-center p-10 w-full text-slate-400">
+            <svg class="animate-spin -ml-1 mr-3 h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span class="font-bold tracking-wide">Fetching episodes...</span>
+        </div>
+    `;
 
     const videoFiles = torrent.files.filter(f => f.name.match(/\.(mkv|mp4|avi|mov)$/i));
     videoFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
-    videoFiles.forEach(file => {
-        const btn = document.createElement('button');
-        btn.className = "w-full text-left p-3 rounded hover:bg-slate-700 border-b border-slate-700/50 truncate flex items-center gap-3";
-        btn.innerHTML = `<span class="text-blue-400">▶</span><span class="text-sm text-slate-200">${file.name}</span>`;
-        btn.onclick = () => {
+    const libImg = document.getElementById(`img-${torrent.id}`);
+    const fallbackPoster = libImg && !libImg.classList.contains('hidden') ? libImg.src : '';
+
+    // 🧠 1. GUESS THE SEASON FROM THE FIRST FILE
+    let targetSeason = 1;
+    let cleanTitle = torrent.name;
+
+    if (videoFiles.length > 0) {
+        const firstFileInfo = parseMediaData(videoFiles[0].name.split('/').pop());
+        if (firstFileInfo.season) targetSeason = firstFileInfo.season;
+        if (firstFileInfo.title) cleanTitle = firstFileInfo.title;
+    }
+
+    // 🧠 2. FETCH THE TMDB DATA FIRST!
+    let tmdbSeasonData = null;
+    try {
+        tmdbSeasonData = await getTmdbSeasonData(tmdbId, cleanTitle, targetSeason);
+    } catch (e) {
+        console.log("Failed to fetch TMDB season data.");
+    }
+
+    list.innerHTML = ''; // Clear the loading spinner
+
+    // 🧠 3. LOOP FILES & MATCH TO TMDB DATA
+    videoFiles.forEach((file, index) => {
+        const cleanFileName = file.name.split('/').pop();
+        const fileInfo = parseMediaData(cleanFileName);
+        const epNum = fileInfo.episode;
+        
+        // 🎯 THE MATCH: Find this specific episode in the TMDB payload
+        let officialEp = null;
+        if (tmdbSeasonData && tmdbSeasonData.episodes && epNum) {
+            officialEp = tmdbSeasonData.episodes.find(e => e.episode_number === epNum);
+        }
+
+        // Determine Final Display Values
+        const epName = officialEp?.name || `Episode ${epNum || index + 1}`;
+        const stillImage = officialEp?.still_path ? `https://image.tmdb.org/t/p/w300${officialEp.still_path}` : fallbackPoster;
+        const runtime = officialEp?.runtime ? `${officialEp.runtime}m` : '';
+        const fileSize = (file.size / 1073741824).toFixed(2) + ' GB';
+
+        const card = document.createElement('div');
+        card.className = "episode-card shrink-0 h-full relative flex flex-col w-56 md:w-64 rounded-xl border-2 border-slate-700 bg-slate-800/80 overflow-hidden cursor-pointer transition-all hover:border-blue-500 hover:shadow-[0_0_15px_rgba(59,130,246,0.2)] group select-none";
+
+        card.innerHTML = `
+            <div class="relative aspect-video bg-slate-900 w-full flex-shrink-0 border-b border-slate-700/50">
+                <img src="${stillImage}" draggable="false" class="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" loading="lazy">
+                
+                <div class="absolute inset-0 flex items-center justify-center">
+                    <div class="w-12 h-12 rounded-full bg-blue-600/90 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all transform scale-75 group-hover:scale-100 shadow-[0_0_20px_rgba(37,99,235,0.4)] backdrop-blur-sm">
+                        <svg class="w-6 h-6 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    </div>
+                </div>
+
+                <div class="absolute bottom-2 right-2 bg-black/85 px-2 py-1 rounded text-[11px] text-white font-bold flex gap-2.5 backdrop-blur-md shadow-lg border border-white/10">
+                    ${runtime ? `<span class="opacity-90">${runtime}</span>` : ''}
+                    <span class="text-blue-400">${fileSize}</span>
+                </div>
+            </div>
+            
+            <div class="p-3.5 flex-1 flex flex-col justify-center gap-1">
+                <p class="text-sm text-blue-400 font-extrabold tracking-wide">E${epNum || index + 1}</p>
+                <p class="text-xs text-slate-200 line-clamp-2 leading-relaxed group-hover:text-white transition-colors" title="${file.name}">${epName}</p>
+            </div>
+        `;
+
+        card.onclick = () => {
+            if (clickCooldown) return;
+            clickCooldown = true;
+            setTimeout(() => clickCooldown = false, 2000);
+
             closePicker();
-            requestLink(currentTorrentId, file.id, torrent.name, file.name); // Using the imported function
+            import('./player.js').then(m => m.requestLink(currentTorrentId, file.id, torrent.name, file.name));
         };
-        list.appendChild(btn);
+
+        list.appendChild(card);
     });
-    picker.classList.remove('hidden');
 }
 
 function closePicker() {
     document.getElementById('file-picker').classList.add('hidden');
-}
-
-// --- TRAKT LOGIC ---
-function initTrakt() {
-    const btn = document.getElementById('trakt-action-btn');
-    const dot = document.getElementById('trakt-status-dot');
-
-    if (localStorage.getItem('trakt_token')) {
-        btn.innerText = "Log out Trakt";
-        btn.classList.add('text-red-400');
-        dot.classList.remove('bg-red-500');
-        dot.classList.add('bg-green-500');
-    } else {
-        btn.innerText = "Connect Trakt";
-        btn.classList.remove('text-red-400');
-        dot.classList.remove('bg-green-500');
-        dot.classList.add('bg-red-500');
-    }
-}
-
-async function handleTraktAuth() {
-    if (localStorage.getItem('trakt_token')) {
-        if (confirm("Log out of Trakt?")) {
-            localStorage.removeItem('trakt_token');
-            initTrakt();
-            toggleProfile();
-        }
-        return;
-    }
-
-    const res = await smartFetch('https://api.trakt.tv/oauth/device/code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: TRAKT_CLIENT_ID })
-    });
-    const data = await res.json();
-
-    document.getElementById('trakt-modal').classList.remove('hidden');
-    document.getElementById('trakt-code').innerText = data.user_code;
-    toggleProfile();
-
-    const interval = setInterval(async () => {
-        const poll = await smartFetch('https://api.trakt.tv/oauth/device/token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                code: data.device_code,
-                client_id: TRAKT_CLIENT_ID,
-                client_secret: 'YOUR_SECRET_NOT_NEEDED_FOR_DEVICE_FLOW'
-            })
-        });
-
-        if (poll.status === 200) {
-            const tokenData = await poll.json();
-            localStorage.setItem('trakt_token', tokenData.access_token);
-            clearInterval(interval);
-            closeTraktModal();
-            initTrakt();
-            alert("Trakt Connected!");
-        }
-    }, data.interval * 1000);
-}
-
-function closeTraktModal() {
-    document.getElementById('trakt-modal').classList.add('hidden');
 }
 
 export async function scrobble(action, movieName, progress) {
@@ -328,7 +535,7 @@ export async function scrobble(action, movieName, progress) {
     } catch (e) { console.log("Trakt Error", e); }
 }
 
-// --- SEARCH ---
+//#region Search
 let searchTimeout = null;
 
 export function handleSearch() {
@@ -343,14 +550,14 @@ export function handleSearch() {
     renderList(filtered);
 
     clearTimeout(searchTimeout);
-    
+
     if (query.length >= 3) {
         // Switch to the 1-second (1000ms) delay
         searchTimeout = setTimeout(() => {
             // Auto-switch to the discover tab for the best viewing experience!
-            showDiscoverTab(); 
+            showDiscoverTab();
             import('./api.js').then(module => module.searchTMDB(query));
-        }, 1000); 
+        }, 1000);
     } else {
         document.getElementById('global-search-results').classList.add('hidden');
     }
@@ -371,13 +578,13 @@ function handleSearchSubmit() {
         if (typeof addMagnetToTorBox === 'function') {
             addMagnetToTorBox(query, (err, res) => {
                 if (!err) {
-                    alert(`Added: ${res.name}`);
+                    showToast(`Added: ${res.name}`, 'success');
                     inputField.value = "";
                     refreshLibrary();
                 }
             });
         } else {
-            alert("Magnet adding function not implemented yet.");
+            showToast("Magnet adding function not implemented yet.");
         }
         return;
     }
@@ -409,18 +616,17 @@ async function deleteTorrent(torrentId, event) {
         const data = await res.json();
 
         if (data.success) {
-            alert("Deleted successfully!");
+            showToast("Deleted successfully!", 'success');
             refreshLibrary();
         } else {
-            alert("Error: " + data.detail);
+            showToast("Error: " + data.detail, 'error');
         }
     } catch (e) {
         console.error("Delete Error:", e);
-        alert("Failed to delete torrent.");
+        showToast("Failed to delete torrent.", 'error');
     }
 }
 
-// --- TAB NAVIGATION UI ---
 // --- TAB NAVIGATION UI ---
 export function showLibraryTab() {
     // 1. Swap the content
@@ -440,7 +646,7 @@ export function showDiscoverTab() {
     // 1. Swap the content
     document.getElementById('dashboard').classList.add('hidden');
     document.getElementById('discover-tab').classList.remove('hidden');
-    
+
     // 2. Light up the Discover button (Blue)
     const discBtn = document.getElementById('tab-discover');
     discBtn.className = "flex-1 py-2.5 rounded-lg bg-blue-600 text-white font-bold text-sm shadow transition-all";
@@ -448,7 +654,7 @@ export function showDiscoverTab() {
     // 3. Dim the Library button (Gray)
     const libBtn = document.getElementById('tab-library');
     libBtn.className = "flex-1 py-2.5 rounded-lg text-slate-400 font-bold text-sm hover:text-white hover:bg-slate-700/50 transition-all";
-    
+
     // Only fetch from the API if the grid is empty!
     if (document.getElementById('trending-row').innerHTML.trim() === '') {
         import('./api.js').then(module => module.loadDiscover());
@@ -466,6 +672,18 @@ window.onclick = function (event) {
     }
 }
 
+window.toggleSetupLayer = () => {
+    const layer = document.getElementById('setup-layer');
+    layer.classList.toggle('hidden');
+
+    // Prevent background scrolling when open
+    if (!layer.classList.contains('hidden')) {
+        document.body.style.overflow = 'hidden';
+    } else {
+        document.body.style.overflow = '';
+    }
+};
+
 // -------------------------------------------------------------
 // --- GLOBAL EXPORTS  ---
 // -------------------------------------------------------------
@@ -476,7 +694,5 @@ window.handleSearch = handleSearch;
 window.handleSearchSubmit = handleSearchSubmit;
 window.toggleProfile = toggleProfile;
 window.logoutTorBox = logoutTorBox;
-window.handleTraktAuth = handleTraktAuth;
-window.closeTraktModal = closeTraktModal;
 window.closePicker = closePicker;
 window.deleteTorrent = deleteTorrent;
