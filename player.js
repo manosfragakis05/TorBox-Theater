@@ -41,6 +41,8 @@ export function startPlayer(url, name) {
 
     window.abortPlayback = false;
 
+    window.currentStreamUrl = url;
+
     currentStreamUrl = url;
     document.getElementById('player-wrapper').classList.remove('hidden');
 
@@ -76,7 +78,6 @@ export function startPlayer(url, name) {
         subtitleOffset: false,
         playbackRate: false,
 
-        // Download MKV from given link
         controls: [
             {
                 position: 'right',
@@ -85,6 +86,17 @@ export function startPlayer(url, name) {
                 click: function () {
                     // This opens the TorBox link in a new tab, instantly starting the raw MKV download!
                     window.open(url, '_blank');
+                },
+            },
+            // NEW: External Player Button
+            {
+                position: 'right',
+                html: '<svg style="width:22px;height:22px;margin-top:2px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>',
+                tooltip: 'Open in External Player',
+                click: function () {
+                    // Pause the web player when they open the modal so they don't get double audio
+                    if (art) art.pause();
+                    document.getElementById('external-player-modal').classList.remove('hidden');
                 },
             }
         ],

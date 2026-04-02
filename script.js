@@ -684,6 +684,49 @@ window.toggleSetupLayer = () => {
     }
 };
 
+// Global variable to hold the active stream URL
+window.currentStreamUrl = ""; 
+
+function openExternalPlayer(player) {
+    const videoUrl = window.currentStreamUrl;
+
+    if (!videoUrl) {
+        showToast("No video stream selected yet.", "error");
+        return;
+    }
+
+    const encodedUrl = encodeURIComponent(videoUrl);
+    let deepLink = '';
+
+    switch(player) {
+        case 'vlc':
+            deepLink = videoUrl.replace(/^https?:\/\//i, 'vlc://');
+            break;
+            
+        case 'infuse':
+            deepLink = `infuse://x-callback-url/play?url=${encodedUrl}`;
+            break;
+            
+        case 'outplayer':
+            deepLink = `outplayer://${encodedUrl}`;
+            break;
+            
+        case 'mxplayer':
+            deepLink = `intent:${videoUrl}#Intent;package=com.mxtech.videoplayer.ad;S.title=${encodeURIComponent("TorBox Stream")};end`;
+            break;
+            
+        case 'iina':
+            deepLink = `iina://weblink?url=${encodedUrl}`;
+            break;
+    }
+
+    // Hide the modal
+    document.getElementById('external-player-modal').classList.add('hidden');
+
+    // Trigger the OS app
+    window.location.href = deepLink;
+}
+
 // -------------------------------------------------------------
 // --- GLOBAL EXPORTS  ---
 // -------------------------------------------------------------
@@ -696,3 +739,4 @@ window.toggleProfile = toggleProfile;
 window.logoutTorBox = logoutTorBox;
 window.closePicker = closePicker;
 window.deleteTorrent = deleteTorrent;
+window.openExternalPlayer = openExternalPlayer;
