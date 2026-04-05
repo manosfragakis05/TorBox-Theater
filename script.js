@@ -1,6 +1,6 @@
-import { parse } from 'https://cdn.jsdelivr.net/npm/parse-torrent-title@2.1.0/+esm';
+import { parse } from './ptt.js';
 
-import { art, startPlayer, playDirect, clearPlayerInstance } from './player.js';
+import { art, playDirect, clearPlayerInstance, stopPlayback } from './player.js';
 import { getPosterForLibrary, TMDB_KEY } from './api.js';
 
 let allTorrents = [];
@@ -186,39 +186,6 @@ function logoutTorBox() {
     }
 }
 
-// UNIVERSAL MEDIA KILLER
-export function stopPlayback() {
-    // 1. Throw the Kill Switch
-    window.abortPlayback = true;
-
-    // 2. The Bulldozer
-    try {
-        if (typeof art !== 'undefined' && art) {
-            if (art.mkvEngine && typeof art.mkvEngine.destroy === 'function') {
-                console.log("🧨 Nuking MKV Engine...");
-                art.mkvEngine.destroy();
-                art.mkvEngine = null;
-            }
-            art.pause();
-            art.destroy(true);
-            clearPlayerInstance(); // Assuming this is imported/available!
-        }
-    } catch (e) {
-        console.log("Player destruction bypassed or already dead.");
-    }
-
-    // 3. The DOM Nuke
-    document.querySelectorAll('video, audio').forEach(media => {
-        try {
-            media.pause();
-            media.removeAttribute('src');
-            media.src = '';
-            media.load();
-            media.remove();
-        } catch (e) { }
-    });
-}
-
 // 🏠 THE CLEANED UP GOHOME
 export function goHome() {
     stopPlayback(); // 👈 Instantly kills everything
@@ -370,29 +337,57 @@ export async function getTmdbSeasonData(tmdbId, cleanName, seasonNum = 1) {
     try {
         let finalId = tmdbId;
 
-        // 1. THE FALLBACK: If we don't have an ID, search TMDB using the clean name
+        // 1. THE FALLBACK SEARCH
         if (!finalId && cleanName) {
             const searchUrl = `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_KEY}&query=${encodeURIComponent(cleanName)}&page=1`;
             const searchRes = await fetch(searchUrl);
             const searchData = await searchRes.json();
-
             if (searchData.results && searchData.results.length > 0) {
                 finalId = searchData.results[0].id;
             }
         }
+        if (!finalId) return null; 
 
-        // 2. THE FAILSAFE: If the search found absolutely nothing, bail out safely
-        if (!finalId) {
-            console.warn(`TMDB Search failed to find an ID for: ${cleanName}`);
-            return null; 
+        // 2. CHECK LOCAL CACHE
+        const cacheKey = `tmdb_season_${finalId}_s${seasonNum}`;
+        const cachedPayload = localStorage.getItem(cacheKey);
+        
+        if (cachedPayload) {
+            const parsedCache = JSON.parse(cachedPayload);
+            // Check if the cache is still valid based on its specific expiration time!
+            if (Date.now() < parsedCache.expiresAt) {
+                console.log(`⚡ Loaded S${seasonNum} instantly from Cache!`);
+                return parsedCache.data;
+            }
         }
 
-        // 3. THE PAYLOAD: We have an ID! Go get the official Season Pack
+        // 3. FETCH FRESH DATA FROM TMDB
         const seasonUrl = `https://api.themoviedb.org/3/tv/${finalId}/season/${seasonNum}?api_key=${TMDB_KEY}`;
         const seasonRes = await fetch(seasonUrl);
         const seasonData = await seasonRes.json();
 
-        // This object contains the `.episodes` array with all the official names and image hashes!
+        // 4. 🧠 SMART CACHE EXPIRY LOGIC
+        let isOngoing = false;
+        
+        // Look at the very last episode in the list
+        if (seasonData.episodes && seasonData.episodes.length > 0) {
+            const lastEp = seasonData.episodes[seasonData.episodes.length - 1];
+            
+            // If it has no air date, or the air date is in the future, the season isn't finished!
+            if (!lastEp.air_date || new Date(lastEp.air_date).getTime() > Date.now()) {
+                isOngoing = true; 
+            }
+        }
+
+        // Ongoing = Cache for 12 Hours. Finished = Cache for 30 Days.
+        const expireTime = isOngoing ? (12 * 60 * 60 * 1000) : (30 * 24 * 60 * 60 * 1000);
+
+        localStorage.setItem(cacheKey, JSON.stringify({
+            expiresAt: Date.now() + expireTime,
+            data: seasonData
+        }));
+
+        console.log(`🌐 Fetched S${seasonNum} from TMDB! (Cached for ${isOngoing ? '12 Hours' : '30 Days'})`);
         return seasonData;
 
     } catch (error) {
@@ -408,101 +403,115 @@ async function openPicker(torrent, tmdbId) {
     const list = document.getElementById('picker-list');
     const title = document.getElementById('picker-title');
 
-    title.innerText = torrent.name;
     picker.classList.remove('hidden');
     currentTorrentId = torrent.id;
 
-    // 🌟 PREMIUM LOADING UI
-    list.innerHTML = `
-        <div class="flex items-center justify-center p-10 w-full text-slate-400">
-            <svg class="animate-spin -ml-1 mr-3 h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <span class="font-bold tracking-wide">Fetching episodes...</span>
-        </div>
-    `;
-
+    // 1. EXTRACT AND SORT ALL FILES FROM THE TORRENT
     const videoFiles = torrent.files.filter(f => f.name.match(/\.(mkv|mp4|avi|mov)$/i));
     videoFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
-    const libImg = document.getElementById(`img-${torrent.id}`);
-    const fallbackPoster = libImg && !libImg.classList.contains('hidden') ? libImg.src : '';
+    // 2. DETECT ALL UNIQUE SEASONS FROM THE FILES
+    const seasonMap = {};
+    videoFiles.forEach(file => {
+        const info = parseMediaData(file.name.split('/').pop());
+        const s = info.season || 1;
+        if (!seasonMap[s]) seasonMap[s] = [];
+        seasonMap[s].push({ file, info });
+    });
 
-    // 🧠 1. GUESS THE SEASON FROM THE FIRST FILE
-    let targetSeason = 1;
-    let cleanTitle = torrent.name;
+    const uniqueSeasons = Object.keys(seasonMap).map(Number).sort((a, b) => a - b);
+    let currentSeason = uniqueSeasons[0] || 1;
 
-    if (videoFiles.length > 0) {
-        const firstFileInfo = parseMediaData(videoFiles[0].name.split('/').pop());
-        if (firstFileInfo.season) targetSeason = firstFileInfo.season;
-        if (firstFileInfo.title) cleanTitle = firstFileInfo.title;
+    // 3. BUILD THE TITLE AND NATIVE SELECTOR
+    let seasonSelectorHTML = '';
+    if (uniqueSeasons.length > 1) {
+        seasonSelectorHTML = `
+            <select id="library-season-select" class="ml-3 bg-slate-800 text-sm font-bold text-blue-400 border border-slate-600 rounded-lg p-1.5 outline-none cursor-pointer">
+                ${uniqueSeasons.map(s => `<option value="${s}">Season ${s}</option>`).join('')}
+            </select>
+        `;
     }
+    
+    const baseInfo = parseMediaData(torrent.name);
+    title.innerHTML = `<span class="truncate">${baseInfo.title}</span> ${seasonSelectorHTML}`;
 
-    // 🧠 2. FETCH THE TMDB DATA FIRST!
-    let tmdbSeasonData = null;
-    try {
-        tmdbSeasonData = await getTmdbSeasonData(tmdbId, cleanTitle, targetSeason);
-    } catch (e) {
-        console.log("Failed to fetch TMDB season data.");
-    }
-
-    list.innerHTML = ''; // Clear the loading spinner
-
-    // 🧠 3. LOOP FILES & MATCH TO TMDB DATA
-    videoFiles.forEach((file, index) => {
-        const cleanFileName = file.name.split('/').pop();
-        const fileInfo = parseMediaData(cleanFileName);
-        const epNum = fileInfo.episode;
-        
-        // 🎯 THE MATCH: Find this specific episode in the TMDB payload
-        let officialEp = null;
-        if (tmdbSeasonData && tmdbSeasonData.episodes && epNum) {
-            officialEp = tmdbSeasonData.episodes.find(e => e.episode_number === epNum);
-        }
-
-        // Determine Final Display Values
-        const epName = officialEp?.name || `Episode ${epNum || index + 1}`;
-        const stillImage = officialEp?.still_path ? `https://image.tmdb.org/t/p/w300${officialEp.still_path}` : fallbackPoster;
-        const runtime = officialEp?.runtime ? `${officialEp.runtime}m` : '';
-        const fileSize = (file.size / 1073741824).toFixed(2) + ' GB';
-
-        const card = document.createElement('div');
-        card.className = "episode-card shrink-0 h-full relative flex flex-col w-56 md:w-64 rounded-xl border-2 border-slate-700 bg-slate-800/80 overflow-hidden cursor-pointer transition-all hover:border-blue-500 hover:shadow-[0_0_15px_rgba(59,130,246,0.2)] group select-none";
-
-        card.innerHTML = `
-            <div class="relative aspect-video bg-slate-900 w-full flex-shrink-0 border-b border-slate-700/50">
-                <img src="${stillImage}" draggable="false" class="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" loading="lazy">
-                
-                <div class="absolute inset-0 flex items-center justify-center">
-                    <div class="w-12 h-12 rounded-full bg-blue-600/90 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all transform scale-75 group-hover:scale-100 shadow-[0_0_20px_rgba(37,99,235,0.4)] backdrop-blur-sm">
-                        <svg class="w-6 h-6 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                    </div>
-                </div>
-
-                <div class="absolute bottom-2 right-2 bg-black/85 px-2 py-1 rounded text-[11px] text-white font-bold flex gap-2.5 backdrop-blur-md shadow-lg border border-white/10">
-                    ${runtime ? `<span class="opacity-90">${runtime}</span>` : ''}
-                    <span class="text-blue-400">${fileSize}</span>
-                </div>
-            </div>
-            
-            <div class="p-3.5 flex-1 flex flex-col justify-center gap-1">
-                <p class="text-sm text-blue-400 font-extrabold tracking-wide">E${epNum || index + 1}</p>
-                <p class="text-xs text-slate-200 line-clamp-2 leading-relaxed group-hover:text-white transition-colors" title="${file.name}">${epName}</p>
+    // 4. THE RENDER FUNCTION FOR A SPECIFIC SEASON
+    const renderSeason = async (seasonNum) => {
+        list.innerHTML = `
+            <div class="col-span-full flex justify-center p-10">
+                <svg class="animate-spin h-8 w-8 text-blue-500" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
             </div>
         `;
 
-        card.onclick = () => {
-            if (clickCooldown) return;
-            clickCooldown = true;
-            setTimeout(() => clickCooldown = false, 2000);
+        // Fetches fresh every time so you never miss a new episode!
+        let tmdbSeasonData = null;
+        try {
+            tmdbSeasonData = await getTmdbSeasonData(tmdbId, baseInfo.title, seasonNum);
+        } catch (e) { console.log("Failed to fetch TMDB season data."); }
 
-            closePicker();
-            import('./player.js').then(m => m.requestLink(currentTorrentId, file.id, torrent.name, file.name));
-        };
+        list.innerHTML = ''; 
+        const filesToRender = seasonMap[seasonNum] || [];
+        const libImg = document.getElementById(`img-${torrent.id}`);
+        const fallbackPoster = libImg && !libImg.classList.contains('hidden') ? libImg.src : '';
 
-        list.appendChild(card);
-    });
+        filesToRender.forEach(({file, info}, index) => {
+            const epNum = info.episode;
+            let officialEp = null;
+            if (tmdbSeasonData && tmdbSeasonData.episodes && epNum) {
+                officialEp = tmdbSeasonData.episodes.find(e => e.episode_number === epNum);
+            }
+
+            const epName = officialEp?.name || `Episode ${epNum || index + 1}`;
+            const stillImage = officialEp?.still_path ? `https://image.tmdb.org/t/p/w300${officialEp.still_path}` : fallbackPoster;
+            const runtime = officialEp?.runtime ? `${officialEp.runtime}m` : '';
+            const fileSize = (file.size / 1073741824).toFixed(2) + ' GB';
+
+            const card = document.createElement('div');
+            // CSS FIX: Changed w-56 to w-full so Grid handles the mobile layout properly
+            card.className = "episode-card h-full relative flex flex-col w-full rounded-xl border-2 border-slate-700 bg-slate-800/80 overflow-hidden cursor-pointer transition-all hover:border-blue-500 hover:shadow-[0_0_15px_rgba(59,130,246,0.2)] group select-none";
+
+            card.innerHTML = `
+                <div class="relative aspect-video bg-slate-900 w-full flex-shrink-0 border-b border-slate-700/50">
+                    <img src="${stillImage}" draggable="false" class="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" loading="lazy">
+                    
+                    <div class="absolute inset-0 flex items-center justify-center">
+                        <div class="w-12 h-12 rounded-full bg-blue-600/90 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all transform scale-75 group-hover:scale-100 shadow-[0_0_20px_rgba(37,99,235,0.4)] backdrop-blur-sm">
+                            <svg class="w-6 h-6 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                        </div>
+                    </div>
+
+                    <div class="absolute bottom-2 right-2 bg-black/85 px-2 py-1 rounded text-[11px] text-white font-bold flex gap-2.5 backdrop-blur-md shadow-lg border border-white/10">
+                        ${runtime ? `<span class="opacity-90">${runtime}</span>` : ''}
+                        <span class="text-blue-400">${fileSize}</span>
+                    </div>
+                </div>
+                
+                <div class="p-3.5 flex-1 flex flex-col justify-center gap-1">
+                    <p class="text-sm text-blue-400 font-extrabold tracking-wide">E${epNum || index + 1}</p>
+                    <p class="text-xs text-slate-200 line-clamp-2 leading-relaxed group-hover:text-white transition-colors" title="${file.name}">${epName}</p>
+                </div>
+            `;
+
+            card.onclick = () => {
+                if (clickCooldown) return;
+                clickCooldown = true; setTimeout(() => clickCooldown = false, 2000);
+                closePicker();
+                import('./player.js').then(m => m.requestLink(torrent.id, file.id, torrent.name, file.name));
+            };
+            list.appendChild(card);
+        });
+    };
+
+    if (uniqueSeasons.length > 1) {
+        document.getElementById('library-season-select').addEventListener('change', (e) => {
+            renderSeason(parseInt(e.target.value));
+        });
+    }
+
+    renderSeason(currentSeason);
 }
 
 function closePicker() {
@@ -534,6 +543,125 @@ export async function scrobble(action, movieName, progress) {
         });
     } catch (e) { console.log("Trakt Error", e); }
 }
+
+// --- DEVICE (GHOST) LIBRARY LOGIC ---
+let expectedLocalFile = null;
+
+window.triggerLocalFilePicker = function(expectedName = null, expectedSize = null) {
+    if (expectedName) {
+        expectedLocalFile = { name: expectedName, size: expectedSize };
+        showToast(`Please re-select: ${expectedName}`, 'info');
+    } else {
+        expectedLocalFile = null; 
+    }
+    document.getElementById('local-file-input').click();
+};
+
+window.processLocalFile = async function(event) {
+    const file = event.target.files[0];
+    if (!file) return; 
+
+    event.target.value = ''; 
+
+    if (expectedLocalFile) {
+        if (file.name !== expectedLocalFile.name || file.size !== expectedLocalFile.size) {
+            showToast(`Incorrect file! Expected: ${expectedLocalFile.name}`, 'error');
+            return;
+        }
+    }
+
+    const localVault = JSON.parse(localStorage.getItem('local_ghost_vault') || '{}');
+    
+    if (!localVault[file.name]) {
+        showToast("Adding to library...", "info");
+        const parsedData = parseMediaData(file.name);
+        
+        let posterUrl = '';
+        try {
+            const tmdbData = await import('./api.js').then(m => m.getPosterForLibrary(parsedData.title, parsedData.year));
+            posterUrl = typeof tmdbData === 'string' ? tmdbData : (tmdbData?.poster || '');
+        } catch(e) { console.warn("Could not fetch poster for local file."); }
+
+        localVault[file.name] = {
+            name: file.name,
+            size: file.size,
+            cleanTitle: parsedData.title,
+            poster: posterUrl,
+            lastPlayed: Date.now()
+        };
+        localStorage.setItem('local_ghost_vault', JSON.stringify(localVault));
+        renderLocalLibrary(); 
+    } else {
+        localVault[file.name].lastPlayed = Date.now();
+        localStorage.setItem('local_ghost_vault', JSON.stringify(localVault));
+    }
+
+    const fileBlobUrl = URL.createObjectURL(file);
+
+    import('./player.js').then(m => {
+        m.startPlayer(fileBlobUrl, file.name); 
+    });
+};
+
+window.renderLocalLibrary = function() {
+    const localVault = JSON.parse(localStorage.getItem('local_ghost_vault') || '{}');
+    const files = Object.values(localVault).sort((a, b) => b.lastPlayed - a.lastPlayed); 
+    
+    const list = document.getElementById('local-file-list');
+    const emptyState = document.getElementById('local-empty-state');
+    
+    if (!list || !emptyState) return;
+
+    list.innerHTML = '';
+    
+    if (files.length === 0) {
+        emptyState.classList.remove('hidden');
+        return;
+    }
+    emptyState.classList.add('hidden');
+
+    files.forEach(fileData => {
+        const card = document.createElement('div');
+        card.className = "relative flex-col cursor-pointer transition-transform hover:scale-105 select-none group";
+        
+        const fallbackInitials = fileData.cleanTitle.substring(0, 2).toUpperCase();
+        
+        card.innerHTML = `
+            <div class="relative w-full aspect-[2/3] bg-slate-800 rounded-lg shadow-lg overflow-hidden border border-slate-700/50">
+                ${fileData.poster 
+                    ? `<img src="${fileData.poster}" class="absolute inset-0 w-full h-full object-cover">` 
+                    : `<div class="absolute inset-0 flex items-center justify-center p-4 text-center text-slate-500 font-bold text-2xl bg-slate-800">${fallbackInitials}</div>`
+                }
+                
+                <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-center items-center pb-4">
+                    <div class="w-12 h-12 bg-emerald-500/90 rounded-full flex items-center justify-center text-white shadow-lg backdrop-blur-sm transform scale-75 group-hover:scale-100 transition-all">
+                        <svg class="w-6 h-6 ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    </div>
+                    <span class="text-white text-[10px] font-bold mt-2 uppercase tracking-widest text-center px-2">Tap to re-link<br>and play</span>
+                </div>
+                
+                <button onclick="event.stopPropagation(); deleteLocalGhost('${fileData.name}')" class="absolute top-2 right-2 text-white bg-black/60 hover:bg-red-600 p-1.5 rounded-full transition opacity-0 group-hover:opacity-100 backdrop-blur-sm">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <p class="text-xs text-slate-300 mt-2 truncate font-semibold pl-1">${fileData.cleanTitle}</p>
+        `;
+
+        card.onclick = () => window.triggerLocalFilePicker(fileData.name, fileData.size);
+        list.appendChild(card);
+    });
+};
+
+window.deleteLocalGhost = function(fileName) {
+    if(!confirm("Remove this from your device library? (The actual file will NOT be deleted from your device).")) return;
+    
+    const localVault = JSON.parse(localStorage.getItem('local_ghost_vault') || '{}');
+    delete localVault[fileName];
+    localStorage.setItem('local_ghost_vault', JSON.stringify(localVault));
+    renderLocalLibrary();
+};
+
+window.renderLocalLibrary();
 
 //#region Search
 let searchTimeout = null;

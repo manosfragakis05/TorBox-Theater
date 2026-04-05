@@ -1,10 +1,12 @@
-const CACHE_NAME = 'torbox-theater-v4'; //Change on changes :)
+const CACHE_NAME = 'torbox-theater-v5'; //Change on changes :)
 const ASSETS = [
     './',
     './index.html',
     './script.js',
     './style.css',
 
+    './artplayer.js',
+    '/ptt.js',
     './engine/mkv_lib.js',
     './engine/streaming-engine.js',
     './engine/streaming_engine.wasm'

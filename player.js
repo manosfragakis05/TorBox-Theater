@@ -1,62 +1,103 @@
 import { MKVPlayer } from './engine/mkv_lib.js';
-import { smartFetch, scrobble, showToast, stopPlayback } from './script.js'; // Import the tools from main script
+import { smartFetch, scrobble, showToast } from './script.js';
 
 export let art = null;
 export let currentStreamUrl = "";
 
-// --- PLAYER LOGIC ---
-export async function requestLink(tid, fid, torrentName, fileName) {
-    stopPlayback();
+// --- THE ULTIMATE KILL SWITCH ---
+export function stopPlayback() {
+    window.abortPlayback = true;
 
+    // 1. Nuke the WASM Engine Memory first
+    if (art && art.mkvEngine) {
+        console.log("🧨 Nuking MKV Engine Buffers...");
+        try {
+            if (typeof art.mkvEngine.destroy === 'function') {
+                art.mkvEngine.destroy();
+            }
+        } catch(e) {}
+        art.mkvEngine = null;
+    }
+
+    // 2. Force the browser to sever active TCP network streams
+    document.querySelectorAll('video, audio').forEach(media => {
+        try {
+            media.pause();
+            media.removeAttribute('src');
+            media.load(); // This specifically tells the browser to drop the buffer!
+            media.remove();
+        } catch (e) { }
+    });
+
+    // 3. Destroy the Artplayer UI
+    if (art) {
+        try { art.destroy(true); } catch(e) {}
+        art = null;
+    }
+
+    // 4. Hide the Theater
+    const wrapper = document.getElementById('player-wrapper');
+    if (wrapper) wrapper.classList.add('hidden');
+}
+
+// --- SECURE LINK REQUESTER ---
+export async function requestLink(tid, fid, torrentName, fileName) {
+    stopPlayback(); 
+    
+    // 🛑 THE NETWORK BREAKER: 
+    // Give the browser 150ms to physically drop the heavy MKV download streams 
+    // before we hammer the TorBox API for a new link. Prevents timeouts!
+    await new Promise(r => setTimeout(r, 150));
+    
     window.abortPlayback = false;
 
     const key = localStorage.getItem('tb_api_key');
     const list = document.getElementById('file-list');
-    list.style.opacity = '0.5';
+    if (list) list.style.opacity = '0.5';
 
     try {
         const targetUrl = `https://api.torbox.app/v1/api/torrents/requestdl?token=${key}&torrent_id=${tid}&file_id=${fid}&zip=false`;
         const res = await smartFetch(targetUrl);
         const data = await res.json();
 
-        if (data.success) {
-            startPlayer(data.data, fileName || torrentName);
-        } else {
-            alert("Link Error: " + data.detail);
+        if (!data.success) {
+            showToast("Link Error: " + data.detail, 'error');
+            if (list) list.style.opacity = '1';
+            return;
         }
-    } catch (e) {
-        showToast("Error requesting link.", 'error');
-    } finally {
-        list.style.opacity = '1';
-    }
 
-    if (window.abortPlayback) {
-        console.log("Ghost playback prevented! User went home.");
-        return;
+        // Did the user click another movie while we were fetching?
+        if (window.abortPlayback) {
+            console.log("Ghost playback prevented! User clicked something else.");
+            return;
+        }
+
+        startPlayer(data.data, fileName || torrentName);
+
+    } catch (e) {
+        console.error("Network Fetch Crash:", e);
+        showToast("Error requesting link. Network timeout.", 'error');
+    } finally {
+        if (list) list.style.opacity = '1';
     }
 }
 
+// --- PLAYER INITIALIZATION ---
 export function startPlayer(url, name) {
-    stopPlayback();
-
+    stopPlayback(); 
     window.abortPlayback = false;
 
-    window.currentStreamUrl = url;
-
+    // Attach the URL to the global window object for the External Player modal
+    window.currentStreamUrl = url; 
     currentStreamUrl = url;
-    document.getElementById('player-wrapper').classList.remove('hidden');
-
-    if (art) art.destroy();
+    
+    const wrapper = document.getElementById('player-wrapper');
+    if (wrapper) wrapper.classList.remove('hidden');
 
     const isMkv = name.toLowerCase().endsWith('.mkv') || url.toLowerCase().split('?')[0].endsWith('.mkv');
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
     const videoType = isMkv ? 'wasm_mkv' : 'auto';
-
-    if (window.abortPlayback) {
-        console.warn("🛑 Race Condition Prevented: Aborting player initialization!");
-        return;
-    }
 
     art = new Artplayer({
         container: '.artplayer-app',
@@ -66,7 +107,7 @@ export function startPlayer(url, name) {
         autoSize: false,
         playsInline: true,
         fullscreen: true,
-        fullscreenWeb: true,
+        fullscreenWeb: false,
         setting: true,
         lock: true,
         fastForward: true,
@@ -84,17 +125,14 @@ export function startPlayer(url, name) {
                 html: '<svg style="width:22px;height:22px;margin-top:2px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>',
                 tooltip: 'Download Original File',
                 click: function () {
-                    // This opens the TorBox link in a new tab, instantly starting the raw MKV download!
                     window.open(url, '_blank');
                 },
             },
-            // NEW: External Player Button
             {
                 position: 'right',
                 html: '<svg style="width:22px;height:22px;margin-top:2px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>',
                 tooltip: 'Open in External Player',
                 click: function () {
-                    // Pause the web player when they open the modal so they don't get double audio
                     if (art) art.pause();
                     document.getElementById('external-player-modal').classList.remove('hidden');
                 },
@@ -107,19 +145,30 @@ export function startPlayer(url, name) {
                 artInstance.notice.show = "Booting Engine...";
 
                 try {
-                    // Use the new class!
                     const player = new MKVPlayer(videoElement);
+                    artInstance.mkvEngine = player; // Attach IMMEDIATELY so stopPlayback can find it
+
+                    if (window.abortPlayback) { player.destroy(); return; }
+
                     await player.load(artUrl);
-                    artInstance.mkvEngine = player;
+
+                    // 🛑 RACE CONDITION CATCH: Check again after heavy memory load
+                    if (window.abortPlayback) { 
+                        console.warn("WASM loaded but user clicked away. Self-destructing!");
+                        player.destroy(); 
+                        return; 
+                    }
 
                     artInstance.notice.show = "Engine Ready!";
 
                     videoElement.addEventListener('loadeddata', () => {
-                        artInstance.play();
+                        if (!window.abortPlayback) artInstance.play();
                     }, { once: true });
                 } catch (error) {
                     console.error("Engine Crash:", error);
-                    artInstance.notice.show = "Error: Engine failed to decode this MKV.";
+                    if (artInstance && artInstance.notice) {
+                        artInstance.notice.show = "Error: Engine failed to decode this MKV.";
+                    }
                 }
             }
         },
@@ -130,51 +179,30 @@ export function startPlayer(url, name) {
         handlePlaybackFailure("Format not supported or link is dead.");
     });
 
-    art.on('destroy', () => {
-        console.log("Player destroyed. Checking for background engines...");
-        if (art.mkvEngine) {
-            art.mkvEngine.destroy(); // Pull the kill switch!
-            art.mkvEngine = null;
-        }
-    });
-
-    //art.on('play', () => { scrobble('start', name, 0); });
-    //art.on('pause', () => { scrobble('stop', name, art.currentTime / art.duration * 100); });
-    //art.on('destroy', () => { scrobble('stop', name, art.currentTime / art.duration * 100); });
-
-    if (videoType !== 'wasm_mkv') {
-        art.play();
-    }
-
+    // 1. HIDE THE NATIVE GEAR ICON IMMEDIATELY ON BOOT
     art.on('ready', () => {
-        if (isIOS) {
-            console.log("🍎 iPhone detected. Hijacking the Fullscreen button...");
-            art.controls.update({
-                name: 'fullscreen',
-                click: function () {
-                    art.fullscreenWeb = !art.fullscreenWeb;
-                    if (art.fullscreenWeb) art.notice.show = "Switched to Web Fullscreen";
-                }
-            });
-        }
+        // Target the actual gear button on the bottom control bar
+        const gearBtn = art.template.$bottom.querySelector('.art-control-setting');
+        if (gearBtn) gearBtn.style.display = 'none';
     });
 
+    // 2. THE SCOUT
     let scoutSent = false;
     art.on('video:playing', async () => {
-        // Make sure it's an MKV and the main engine actually exists
         if (isMkv && !scoutSent && art.mkvEngine) {
             scoutSent = true;
             console.log("🕵️ Fetching tracks from existing engine...");
 
             try {
-                // Grab the ALREADY RUNNING engine
                 const player = art.mkvEngine;
-
-                // Grab the tracks instantly from memory
                 const audioTracks = player.getAudioTracks();
+                
+                // Grab the gear button again so we can control it
+                const gearBtn = art.template.$bottom.querySelector('.art-control-setting');
 
+                // ONLY RUN IF THERE ARE MULTIPLE TRACKS
                 if (audioTracks && audioTracks.length > 1) {
-                    console.log(`🎧 Found ${audioTracks.length} tracks! Adding menu...`);
+                    console.log(`🎧 Found ${audioTracks.length} tracks! Enabling menu...`);
 
                     const langMap = {
                         'eng': 'English', 'gr': 'Greek', 'jpn': 'Japanese', 'spa': 'Spanish',
@@ -192,6 +220,10 @@ export function startPlayer(url, name) {
                         };
                     });
 
+                    // UNHIDE THE NATIVE GEAR ICON!
+                    if (gearBtn) gearBtn.style.display = ''; 
+
+                    // POPULATE THE NATIVE SETTINGS MENU
                     art.setting.add({
                         html: 'Audio Track',
                         tooltip: trackOptions[0].html,
@@ -213,6 +245,9 @@ export function startPlayer(url, name) {
                             return item.html;
                         }
                     });
+                } else {
+                    // FORCE HIDE IF ONLY 1 TRACK
+                    if (gearBtn) gearBtn.style.display = 'none';
                 }
             } catch (e) {
                 console.warn("Scout failed to read tracks:", e);
@@ -228,8 +263,6 @@ export function handlePlaybackFailure(reason) {
     art.destroy();
     clearPlayerInstance();
     document.getElementById('player-wrapper').classList.add('hidden');
-
-    // 🛑 USE THE NEW GLOBAL SYSTEM
     showToast(`Playback Failed: ${reason}`, 'error');
 }
 
@@ -252,7 +285,6 @@ export function playDirect() {
     startPlayer(url, decodeURIComponent(cleanName));
 }
 
-// Helper to safely clear the player variable from other files
 export function clearPlayerInstance() {
     art = null;
 }
