@@ -15,7 +15,7 @@ export function stopPlayback() {
             if (typeof art.mkvEngine.destroy === 'function') {
                 art.mkvEngine.destroy();
             }
-        } catch(e) {}
+        } catch (e) { }
         art.mkvEngine = null;
     }
 
@@ -31,7 +31,7 @@ export function stopPlayback() {
 
     // 3. Destroy the Artplayer UI
     if (art) {
-        try { art.destroy(true); } catch(e) {}
+        try { art.destroy(true); } catch (e) { }
         art = null;
     }
 
@@ -42,13 +42,13 @@ export function stopPlayback() {
 
 // --- SECURE LINK REQUESTER ---
 export async function requestLink(tid, fid, torrentName, fileName) {
-    stopPlayback(); 
-    
+    stopPlayback();
+
     // 🛑 THE NETWORK BREAKER: 
     // Give the browser 150ms to physically drop the heavy MKV download streams 
     // before we hammer the TorBox API for a new link. Prevents timeouts!
     await new Promise(r => setTimeout(r, 150));
-    
+
     window.abortPlayback = false;
 
     const key = localStorage.getItem('tb_api_key');
@@ -84,13 +84,13 @@ export async function requestLink(tid, fid, torrentName, fileName) {
 
 // --- PLAYER INITIALIZATION ---
 export function startPlayer(url, name) {
-    stopPlayback(); 
+    stopPlayback();
     window.abortPlayback = false;
 
     // Attach the URL to the global window object for the External Player modal
-    window.currentStreamUrl = url; 
+    window.currentStreamUrl = url;
     currentStreamUrl = url;
-    
+
     const wrapper = document.getElementById('player-wrapper');
     if (wrapper) wrapper.classList.remove('hidden');
 
@@ -125,7 +125,23 @@ export function startPlayer(url, name) {
                 html: '<svg style="width:22px;height:22px;margin-top:2px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>',
                 tooltip: 'Download Original File',
                 click: function () {
-                    window.open(url, '_blank');
+                    // 1. Detect if we are running as a standalone PWA
+                    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+                    const isPWA = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+
+                    if (isIOS && isPWA) {
+                        // 2. iOS PWA Hack: Force the OS to intercept the navigation and prompt a download
+                        window.location.assign(url);
+                    } else {
+                        // 3. Desktop/Android/Standard Web: Use a hidden anchor tag (more reliable than window.open)
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.target = '_blank';
+                        a.download = ''; // Tells the browser to download, not play
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }
                 },
             },
             {
@@ -153,10 +169,10 @@ export function startPlayer(url, name) {
                     await player.load(artUrl);
 
                     // 🛑 RACE CONDITION CATCH: Check again after heavy memory load
-                    if (window.abortPlayback) { 
+                    if (window.abortPlayback) {
                         console.warn("WASM loaded but user clicked away. Self-destructing!");
-                        player.destroy(); 
-                        return; 
+                        player.destroy();
+                        return;
                     }
 
                     artInstance.notice.show = "Engine Ready!";
@@ -196,7 +212,7 @@ export function startPlayer(url, name) {
             try {
                 const player = art.mkvEngine;
                 const audioTracks = player.getAudioTracks();
-                
+
                 // Grab the gear button again so we can control it
                 const gearBtn = art.template.$bottom.querySelector('.art-control-setting');
 
@@ -221,7 +237,7 @@ export function startPlayer(url, name) {
                     });
 
                     // UNHIDE THE NATIVE GEAR ICON!
-                    if (gearBtn) gearBtn.style.display = ''; 
+                    if (gearBtn) gearBtn.style.display = '';
 
                     // POPULATE THE NATIVE SETTINGS MENU
                     art.setting.add({
