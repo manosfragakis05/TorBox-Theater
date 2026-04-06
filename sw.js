@@ -1,4 +1,4 @@
-const CACHE_NAME = 'torbox-theater-v5'; //Change on changes :)
+const CACHE_NAME = 'torbox-theater-v6'; //Change on changes :)
 const ASSETS = [
     './',
     './index.html',
@@ -6,7 +6,7 @@ const ASSETS = [
     './style.css',
 
     './artplayer.js',
-    '/ptt.js',
+    './ptt.js',
     './engine/mkv_lib.js',
     './engine/streaming-engine.js',
     './engine/streaming_engine.wasm'
@@ -39,9 +39,23 @@ self.addEventListener('activate', (event) => {
 
 // Fetch: Serve UI from cache, let API and Videos pass through
 self.addEventListener('fetch', (event) => {
+    // 1. VIP LANE: Ignore local device files (blobs) completely
+    if (event.request.url.startsWith('blob:')) {
+        return; 
+    }
+
+    // 2. VIP LANE: Ignore Video Chunking (Range requests)
+    // If the WASM engine asks for a piece of a video, let the browser handle it!
+    if (event.request.headers.has('range')) {
+        return;
+    }
+
+    // 3. Ignore external APIs (like TorBox)
     if (!event.request.url.startsWith(self.location.origin)) {
         return;
     }
+
+    // 4. Standard Cache for HTML, CSS, JS, and WASM files
     event.respondWith(
         caches.match(event.request).then((cachedResponse) => {
             return cachedResponse || fetch(event.request);
