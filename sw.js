@@ -2,13 +2,20 @@ const CACHE_NAME = 'torbox-theater-v6'; //Change on changes :)
 const ASSETS = [
     './',
     './index.html',
-    './script.js',
     './style.css',
-
+    
+    // Core App Logic
+    './script.js',
+    './api.js',
+    './player.js',
+    
+    // External Libraries (Downloaded locally)
     './artplayer.js',
     './ptt.js',
+    
+    // MKV Engine (Make absolutely sure these match your actual folder spelling!)
     './engine/mkv_lib.js',
-    './engine/streaming-engine.js',
+    './engine/streaming_engine.js', // Changed dash to underscore!
     './engine/streaming_engine.wasm'
 ];
 
