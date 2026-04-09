@@ -1,4 +1,4 @@
-const CACHE_NAME = 'torbox-theater-v6'; //Change on changes :)
+const CACHE_NAME = 'torbox-theater-v7'; //Change on changes :)
 const ASSETS = [
     './',
     './index.html',
@@ -15,7 +15,7 @@ const ASSETS = [
     
     // MKV Engine (Make absolutely sure these match your actual folder spelling!)
     './engine/mkv_lib.js',
-    './engine/streaming_engine.js', // Changed dash to underscore!
+    './engine/streaming-engine.js', // Changed dash to underscore!
     './engine/streaming_engine.wasm'
 ];
 

@@ -193,6 +193,8 @@ export function goHome() {
     document.getElementById('player-wrapper').classList.add('hidden');
     document.getElementById('search-input').value = '';
 
+    window.location.reload();
+    
     refreshLibrary();
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
