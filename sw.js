@@ -1,4 +1,4 @@
-const CACHE_NAME = 'torbox-theater-v7'; //Change on changes :)
+const CACHE_NAME = 'torbox-theater-v8'; //Change on changes :)
 const ASSETS = [
     './',
     './index.html',
