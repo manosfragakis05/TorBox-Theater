@@ -127,14 +127,13 @@ export function startPlayer(url, name) {
                 click: function () {
                     art.notice.show = "Starting background download...";
                     
-                    // We encode the real TorBox URL and the movie name
                     const safeUrl = encodeURIComponent(url);
                     const safeName = encodeURIComponent(name || 'movie.mkv');
                     
-                    // We point the browser to our fake Service Worker URL
-                    const proxyUrl = `/download-proxy?url=${safeUrl}&name=${safeName}`;
+                    // GitHub Pages safe: We just append a query parameter to the current URL!
+                    const proxyUrl = `?proxy_download=true&url=${safeUrl}&name=${safeName}`;
                     
-                    // Navigate to it (The SW will intercept it before it actually loads a new page)
+                    // Navigate to it
                     window.location.assign(proxyUrl);
                 },
             },

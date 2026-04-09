@@ -52,9 +52,9 @@ self.addEventListener('fetch', (event) => {
         return; 
     }
 
-    // 1. THE DOWNLOAD PROXY (For iOS PWA Downloads)
+    // 1. THE DOWNLOAD PROXY (GitHub Pages Safe Version)
     const reqUrl = new URL(event.request.url);
-    if (reqUrl.pathname === '/download-proxy') {
+    if (reqUrl.searchParams.get('proxy_download') === 'true') {
         const targetUrl = reqUrl.searchParams.get('url');
         const fileName = reqUrl.searchParams.get('name') || 'movie.mkv';
 
