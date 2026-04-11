@@ -123,18 +123,23 @@ export function startPlayer(url, name) {
             {
                 position: 'right',
                 html: '<svg style="width:22px;height:22px;margin-top:2px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>',
-                tooltip: 'Download via Proxy',
+                tooltip: '1-Click Download',
                 click: function () {
-                    art.notice.show = "Starting background download...";
+                    art.notice.show = "Opening Downloader...";
                     
-                    const safeUrl = encodeURIComponent(url);
-                    const safeName = encodeURIComponent(name || 'movie.mkv');
+                    // The "Ugly" 1-Click Escape Hatch
+                    const a = document.createElement('a');
+                    a.href = url;
                     
-                    // GitHub Pages safe: We just append a query parameter to the current URL!
-                    const proxyUrl = `?proxy_download=true&url=${safeUrl}&name=${safeName}`;
+                    // CRITICAL: We FORCE a new tab. In an iOS PWA, this forces the "mini-browser" overlay to open.
+                    a.target = '_blank';
                     
-                    // Navigate to it
-                    window.location.assign(proxyUrl);
+                    // We request a download. The TorBox API headers will do the rest of the heavy lifting.
+                    a.download = name || 'movie.mkv';
+                    
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
                 },
             },
             {

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'torbox-theater-v9'; // Bumped to v9 to force the overwrite!
+const CACHE_NAME = 'torbox-theater-v10';
 const ASSETS = [
     './',
     './index.html',
@@ -13,9 +13,9 @@ const ASSETS = [
     './artplayer.js',
     './ptt.js',
     
-    // MKV Engine 
+    // MKV Engine (Exact spelling retained!)
     './engine/mkv_lib.js',
-    './engine/streaming-engine.js', // Actually changed to underscore this time!
+    './engine/streaming-engine.js', 
     './engine/streaming_engine.wasm'
 ];
 
@@ -52,47 +52,22 @@ self.addEventListener('fetch', (event) => {
         return; 
     }
 
-    // 1. THE DOWNLOAD PROXY (GitHub Pages Safe Version)
-    const reqUrl = new URL(event.request.url);
-    if (reqUrl.searchParams.get('proxy_download') === 'true') {
-        const targetUrl = reqUrl.searchParams.get('url');
-        const fileName = reqUrl.searchParams.get('name') || 'movie.mkv';
-
-        event.respondWith(
-            fetch(targetUrl).then(response => {
-                const newHeaders = new Headers(response.headers);
-                newHeaders.set('Content-Disposition', `attachment; filename="${fileName}"`);
-                newHeaders.set('Content-Type', 'application/octet-stream');
-
-                return new Response(response.body, {
-                    status: 200,
-                    statusText: 'OK',
-                    headers: newHeaders
-                });
-            }).catch(err => {
-                console.error("Proxy Download Failed", err);
-                return fetch(targetUrl); 
-            })
-        );
-        return; 
-    }
-
-    // 2. VIP LANE: Ignore local device files (blobs) completely
+    // 1. VIP LANE: Ignore local device files (blobs) completely
     if (event.request.url.startsWith('blob:')) {
         return; 
     }
 
-    // 3. VIP LANE: Ignore Video Chunking (Range requests)
+    // 2. VIP LANE: Ignore Video Chunking (Range requests)
     if (event.request.headers.has('range')) {
         return;
     }
 
-    // 4. Ignore external APIs (like TorBox/TMDB)
+    // 3. Ignore external APIs (like TorBox/TMDB)
     if (!event.request.url.startsWith(self.location.origin)) {
         return;
     }
 
-    // 5. Standard Cache WITH Offline Crash Protection
+    // 4. Standard Cache WITH Offline Crash Protection
     event.respondWith(
         caches.match(event.request).then((cachedResponse) => {
             // If it's in the cache, serve it. If not, try the network.
