@@ -8,6 +8,7 @@ const ASSETS = [
     './script.js',
     './api.js',
     './player.js',
+    './parseMedia.js',
     
     // External Libraries (Downloaded locally)
     './artplayer.js',

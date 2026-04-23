@@ -1,5 +1,5 @@
-import { smartFetch, parseMediaData, showToast } from './script.js';
-
+import { smartFetch, showToast, getTmdbSeasonData, getKitsuEpisodesCached, buildKitsuGrid, MY_PROXY } from './script.js';
+import { parseMediaData } from './parseMedia.js';
 
 //#region TMDB LOGIC
 export const TMDB_KEY = 'ee7a32cee36ed0cd1f028f10c32fa0cf';
@@ -71,7 +71,9 @@ export function enableDragScroll(containerId) {
     initGlobalDrag(); // Set up the window listeners (it only runs once)
 
     const slider = document.getElementById(containerId);
-    if (!slider) return;
+    if (!slider || slider.dataset.dragEnabled) return;
+
+    slider.dataset.dragEnabled = "true";
 
     slider.addEventListener('mousedown', (e) => {
         isDown = true;
@@ -79,7 +81,6 @@ export function enableDragScroll(containerId) {
         activeSlider = slider;
 
         slider.classList.add('cursor-grabbing');
-        // ❌ DELETED: slider.classList.remove('snap-x');
 
         document.body.classList.add('select-none');
 
@@ -87,11 +88,19 @@ export function enableDragScroll(containerId) {
         scrollLeft = slider.scrollLeft;
     });
 
-    // Notice: We completely deleted the 'mouseleave' event!
+    let isThrottled = false;
 
     slider.addEventListener('scroll', () => {
+        // If we are currently throttled, ignore the scroll completely
+        if (isThrottled) return;
+
+        // Otherwise, lock the gate for 150 milliseconds
+        isThrottled = true;
+        setTimeout(() => { isThrottled = false; }, 150);
+
+        // Now do the math!
         if (slider.scrollWidth - slider.scrollLeft - slider.clientWidth < 300) {
-            // Only fetch if it's NOT the episode list (prevents crashing the TV row)
+            // Only fetch if it's NOT the episode list
             if (containerId !== 'episode-list') {
                 fetchNextPage(containerId);
             }
@@ -99,18 +108,14 @@ export function enableDragScroll(containerId) {
     });
 }
 
+// LIST THE SHOWS
 function appendCards(movies, containerId) {
     const row = document.getElementById(containerId);
 
     movies.forEach(movie => {
         if (movie.media_type === 'person' || !movie.poster_path) return;
 
-        // --- 🚨 THE BULLETPROOF TYPE DETECTOR 🚨 ---
-        // 1. Check if TMDB explicitly told us the type.
-        // 2. If missing (like in discover/tv), check if it has a 'name' property instead of 'title'.
         const detectedType = movie.media_type || (movie.name ? 'tv' : 'movie');
-
-        // Pick the right text fields based on what it is
         const displayTitle = movie.title || movie.name;
         const displayDate = movie.release_date || movie.first_air_date || '';
         const year = displayDate.split('-')[0] || 'N/A';
@@ -118,6 +123,7 @@ function appendCards(movies, containerId) {
         const card = document.createElement('div');
         card.className = "relative flex-none w-32 md:w-40 cursor-pointer transition-transform hover:scale-105 select-none";
 
+        // Removed the Anime Badge logic and HTML injection completely
         card.innerHTML = `
             <img src="https://image.tmdb.org/t/p/w500${movie.poster_path}" 
                  class="rounded-lg shadow-lg w-full h-auto object-cover border border-slate-700/50 bg-slate-800 aspect-[2/3]" 
@@ -128,12 +134,10 @@ function appendCards(movies, containerId) {
         `;
 
         card.onclick = (e) => {
-            if (isDragging) {
-                e.preventDefault();
-                return;
-            }
-            // Pass the perfectly detected type to the detail screen!
-            openMovieDetail(movie.id, detectedType);
+            if (isDragging) { e.preventDefault(); return; }
+
+            // 🛤️ Send EVERYTHING to the unified router!
+            openMasterDetail(movie.id, detectedType, displayTitle, movie.backdrop_path, movie.poster_path);
         };
         row.appendChild(card);
     });
@@ -278,26 +282,6 @@ export async function loadDiscover() {
     loadMyPicks();
 }
 
-// The Bridge to Torrentio (Next step!)
-async function handleMovieClick(tmdbId, title) {
-    console.log(`Clicked: ${title} (TMDB ID: ${tmdbId})`);
-    try {
-        const url = `https://api.themoviedb.org/3/movie/${tmdbId}/external_ids?api_key=${TMDB_KEY}`;
-        const response = await fetch(url);
-        const data = await response.json();
-        const imdbId = data.imdb_id;
-
-        if (imdbId) {
-            console.log(`✅ Success! IMDB ID: ${imdbId}`);
-            alert(`You clicked: ${title}\nIMDB ID: ${imdbId}\n\nReady for Torrentio!`);
-        } else {
-            alert(`Sorry, no IMDB ID found for ${title}.`);
-        }
-    } catch (e) {
-        console.error("Translation Error:", e);
-    }
-}
-
 export async function getPosterForLibrary(cleanTitle, year) {
     try {
         let url = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(cleanTitle)}&page=1`;
@@ -380,6 +364,44 @@ export async function loadMyPicks() {
     }
 }
 
+//#region IN SHOW
+// --- THE MASTER ROUTER ---
+async function openMasterDetail(tmdbId, type, fallbackTitle, backdropPath, posterPath) {
+    const view = document.getElementById('movie-detail-view');
+
+    const backdrop = backdropPath ? `https://image.tmdb.org/t/p/original${backdropPath}` : '';
+    const poster = posterPath ? `https://image.tmdb.org/t/p/w500${posterPath}` : '';
+
+    document.getElementById('detail-backdrop').style.backgroundImage = `url(${backdrop})`;
+    document.getElementById('detail-poster').src = poster;
+    document.getElementById('detail-title').innerText = fallbackTitle || "Loading...";
+    document.getElementById('detail-overview').innerText = "Scanning databases...";
+    document.getElementById('tv-controls').classList.add('hidden');
+
+    view.classList.remove('translate-y-full');
+    document.body.style.overflow = 'hidden';
+
+    // 1. THE VIBE CHECK 🕵️‍♂️ (Hits Fribb)
+    document.getElementById('detail-overview').innerText = "Checking Anime databases...";
+    const isMovie = type === 'movie';
+    const animeIds = await getAnimeIds(tmdbId, isMovie);
+
+    // 2. IF IT IS ANIME: Pass the MAL ID to our new UI!
+    if (animeIds && animeIds.malId) {
+        console.log(`🌸 Routing to Anime UI (MAL ID: ${animeIds.malId})`);
+        document.getElementById('detail-overview').innerText = "Translating episode data...";
+
+        // Pass malId instead of kitsuId!
+        return openAnimeDetail(tmdbId, animeIds.malId, fallbackTitle, backdropPath, posterPath);
+    }
+
+    // 3. THE FALLBACK 🎬 (Western TV or Standard Movies)
+    console.log(`🎬 Vibe Check: Routing to Standard TMDB UI`);
+    document.getElementById('detail-overview').innerText = "Loading details...";
+    activeMedia.malData = null; // Clear it out just in case
+    return openMovieDetail(tmdbId, type);
+}
+
 //Open FULL file page(description and both playbacks)
 export async function openMovieDetail(id, type = 'movie') {
     const view = document.getElementById('movie-detail-view');
@@ -430,13 +452,13 @@ export async function openMovieDetail(id, type = 'movie') {
             customSeasonMenu.classList.add('hidden'); // Ensure closed on load
             seasonChevron.classList.remove('rotate-180');
 
-            const validSeasons = data.seasons ? data.seasons.filter(s => s.season_number > 0) : [];
+            const validSeasons = data.seasons ? data.seasons.filter(s => s.season_number >= 0) : [];
 
             // The function that runs when you pick a new season
             const handleSeasonChange = async (sNum) => {
                 // Update the UI
                 seasonSelectInput.value = sNum;
-                customSeasonText.innerText = `Season ${sNum}`;
+                customSeasonText.innerText = sNum === 0 ? "OVA / Specials" : `Season ${sNum}`;
                 customSeasonMenu.classList.add('hidden');
                 seasonChevron.classList.remove('rotate-180');
 
@@ -498,6 +520,9 @@ export async function openMovieDetail(id, type = 'movie') {
                         `;
                         episodeList.appendChild(card);
                     });
+                } else {
+                    // 🎬 WESTERN TV FALLBACK (Safe)
+                    episodeList.innerHTML = '<p class="text-slate-500 p-4 text-sm">No episodes found for this season.</p>';
                 }
             };
 
@@ -507,7 +532,7 @@ export async function openMovieDetail(id, type = 'movie') {
                 // These are your beautiful, styled options!
                 btn.className = `season-option w-full text-left px-5 py-3 hover:bg-slate-700/50 transition border-l-4 border-transparent text-white font-bold text-sm border-b border-slate-700/30 last:border-b-0`;
                 btn.dataset.season = s.season_number;
-                btn.innerText = `Season ${s.season_number}`;
+                btn.innerText = s.season_number === 0 ? "OVA / Specials" : `Season ${s.season_number}`;
                 btn.onclick = () => handleSeasonChange(s.season_number);
                 customSeasonMenu.appendChild(btn);
             });
@@ -520,32 +545,29 @@ export async function openMovieDetail(id, type = 'movie') {
 
             // Trigger the first season to load automatically
             if (validSeasons.length > 0) {
-                handleSeasonChange(validSeasons[0].season_number);
+                const defaultSeason = validSeasons.find(s => s.season_number === 1) || validSeasons[0];
+                handleSeasonChange(defaultSeason.season_number);
             }
         } else if (tvControls) {
             tvControls.classList.add('hidden');
             tvControls.classList.remove('flex');
         }
 
-        // 👇 --- ADD THIS MISSING BLOCK --- 👇
+        // 🧠 5. BIND THE PLAY BUTTONS
         const btnTorrent = document.getElementById('btn-torrent');
         const btnScraper = document.getElementById('btn-scraper');
 
         // Play (High Quality) Button
         btnTorrent.onclick = () => {
-            startTorrentioStream(id, title, type);
+            startTorrentioStream(tmdbId, fallbackTitle, 'tv');
         };
 
-        // Play (Direct Stream) Button
+        // Play (Direct Stream IFrame) Button
         btnScraper.onclick = () => {
-            // Grab the season and episode (from our new hidden input!) if it's a TV show
-            const s = type === 'tv' ? document.getElementById('season-select').value : null;
-            const e = type === 'tv' ? document.getElementById('selected-episode').value : null;
-
-            // Pass the data to the iframe player
-            openIframePlayer(id, title, type, s, e);
+            const currentAbsoluteEp = document.getElementById('selected-episode').value;
+            // ⚠️ Note: We are passing '1' for the season as a temporary placeholder.
+            openIframePlayer(tmdbId, fallbackTitle, 'tv', 1, currentAbsoluteEp);
         };
-        // 👆 --- END OF MISSING BLOCK --- 👆
 
         // 4. Show the page!
         view.classList.remove('translate-y-full');
@@ -557,49 +579,459 @@ export async function openMovieDetail(id, type = 'movie') {
     }
 }
 
+// CHECK IF ITS AN ANIME (FRIBB API)
+export async function getAnimeIds(tmdbId, isMovie = false) {
+    const workerBaseUrl = MY_PROXY.replace('/?url=', '');
+
+    // 1. Ask Fribb (The Gatekeeper)
+    try {
+        const mapUrl = `${workerBaseUrl}/map?tmdb=${tmdbId}`;
+        const res = await fetch(mapUrl);
+
+        if (res.ok) {
+            const data = await res.json();
+            if (data.kitsu_id) {
+                console.log(`⚡ Fribb Hit! TMDB ${tmdbId} -> Kitsu ${data.kitsu_id} | MAL ${data.mal_id || 'None'}`);
+                return { kitsuId: data.kitsu_id, malId: data.mal_id };
+            }
+        }
+        console.log("🎬 Not found in Anime DB (Likely Western Media).");
+    } catch (e) {
+        console.warn("🚨 Fribb Worker failed.", e);
+    }
+
+    return null;
+}
+
+export async function openAnimeDetail(tmdbId, baseMalId, fallbackTitle, backdropPath, posterPath) {
+    const tvControls = document.getElementById('tv-controls');
+    const customSeasonMenu = document.getElementById('custom-season-menu');
+    const episodeList = document.getElementById('episode-list');
+
+    try {
+        // 1. FETCH BASIC TMDB DATA 
+        const tmdbUrl = `https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${TMDB_KEY}`;
+        const tmdbRes = await fetch(tmdbUrl);
+        const tmdbData = await tmdbRes.json();
+
+        document.getElementById('detail-year').innerText = tmdbData.first_air_date ? tmdbData.first_air_date.split('-')[0] : 'N/A';
+        document.getElementById('detail-rating').innerText = `★ ${tmdbData.vote_average?.toFixed(1)}`;
+        document.getElementById('detail-overview').innerText = tmdbData.overview || "No description available.";
+
+        activeMedia.id = tmdbId;
+        activeMedia.type = 'tv';
+        activeMedia.malId = baseMalId;
+
+        tvControls.classList.remove('hidden');
+        tvControls.classList.add('flex');
+        document.getElementById('custom-season-trigger').classList.remove('hidden');
+
+        const handleSeasonChange = async (targetMalId, uiTitle, cleanTitle, optionElement, targetTmdbSeason = 1, totalEpisodes = 1) => {
+            
+            // 🧪 --- OFFICIAL MAL-SYNC TRANSLATOR (FOR GITHUB PAGES) ---
+            console.log(`\n🔍 --- TRANSLATING: ${cleanTitle} ---`);
+            console.log(`Target MAL ID: ${targetMalId}`);
+            
+            try {
+                // This will fail on localhost, but works flawlessly on GitHub Pages!
+                const syncUrl = `https://api.malsync.moe/mal/anime/${targetMalId}`;
+                
+                fetch(syncUrl).then(res => {
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    return res.json();
+                }).then(syncData => {
+                    
+                    if (syncData.Sites && syncData.Sites.TMDB) {
+                        if (syncData.Sites.TMDB.show) {
+                            const trueTmdbId = Object.keys(syncData.Sites.TMDB.show)[0];
+                            console.log(`📺 TRANSLATED: TMDB TV Show ID [${trueTmdbId}]`);
+                        } else if (syncData.Sites.TMDB.movie) {
+                            const trueTmdbId = Object.keys(syncData.Sites.TMDB.movie)[0];
+                            console.log(`🎬 TRANSLATED: TMDB Movie ID [${trueTmdbId}]`);
+                        }
+                    } else {
+                        console.log(`⚠️ WARNING: MAL-Sync has no TMDB mapping for this ID.`);
+                    }
+
+                    if (syncData.Sites && syncData.Sites.Kitsu) {
+                        const trueKitsuId = Object.keys(syncData.Sites.Kitsu)[0];
+                        console.log(`🦊 TRANSLATED: Kitsu ID [${trueKitsuId}]`);
+                    }
+
+                    console.log(`--------------------------------------\n`);
+                    
+                }).catch(e => console.warn("MAL-Sync API Fetch Failed.", e));
+            } catch (e) {
+                // Silent catch
+            }
+            // ------------------------------------------------
+
+            document.getElementById('custom-season-text').innerHTML = uiTitle;
+            customSeasonMenu.classList.add('hidden');
+            document.getElementById('season-chevron').classList.remove('rotate-180');
+
+            document.querySelectorAll('.season-option').forEach(opt => {
+                opt.classList.remove('bg-fuchsia-600/20', 'text-fuchsia-400', 'border-fuchsia-500');
+                opt.classList.add('text-white', 'border-transparent');
+            });
+            if (optionElement) {
+                optionElement.classList.add('bg-fuchsia-600/20', 'text-fuchsia-400', 'border-fuchsia-500');
+                optionElement.classList.remove('text-white', 'border-transparent');
+            }
+
+            episodeList.innerHTML = '<p class="text-fuchsia-400 font-bold p-4 animate-pulse">Loading Episodes...</p>';
+
+            const allEpisodes = await fetchAllMalEpisodes(targetMalId);
+            episodeList.innerHTML = '';
+            let fallbackBg = backdropPath ? `https://image.tmdb.org/t/p/w500${backdropPath}` : '';
+
+            // 🎬 RENDER LOGIC
+            if (allEpisodes.length > 0) {
+                document.getElementById('selected-episode').value = allEpisodes[0].mal_id;
+
+                allEpisodes.forEach((ep, index) => {
+                    const epNumber = ep.mal_id;
+                    const rawTitle = ep.title || `Episode ${epNumber}`;
+                    const epTitle = rawTitle.replace(/<\/?[^>]+(>|$)/g, ""); 
+                    
+                    const isSelected = index === 0 ? 'border-fuchsia-500 bg-fuchsia-500/10' : 'border-slate-700 bg-slate-800/50';
+
+                    const card = document.createElement('div');
+                    card.className = `episode-card relative flex-none w-40 md:w-48 rounded-xl border-2 ${isSelected} overflow-hidden cursor-pointer transition-all hover:border-fuchsia-400 shrink-0 group select-none`;
+
+                    card.onclick = (e) => {
+                        if (isDragging) { e.preventDefault(); return; }
+                        document.getElementById('selected-episode').value = epNumber;
+
+                        document.querySelectorAll('.episode-card').forEach(c => {
+                            c.classList.remove('border-fuchsia-500', 'bg-fuchsia-500/10');
+                            c.classList.add('border-slate-700', 'bg-slate-800/50');
+                        });
+                        card.classList.remove('border-slate-700', 'bg-slate-800/50');
+                        card.classList.add('border-fuchsia-500', 'bg-fuchsia-500/10');
+                    };
+
+                    card.innerHTML = `
+                        <div class="relative aspect-video bg-slate-900 w-full">
+                            <img src="${fallbackBg}" draggable="false" class="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" loading="lazy">
+                        </div>
+                        <div class="p-2">
+                            <p class="text-xs text-fuchsia-400 font-bold tracking-wide">E${epNumber}</p>
+                            <p class="text-[10px] text-slate-300 truncate mt-0.5" title="${epTitle}">${epTitle}</p>
+                        </div>
+                    `;
+                    episodeList.appendChild(card);
+                });
+            } else {
+                // 🎬 THE DYNAMIC MOVIE/OVA FALLBACK
+                // We use the Spider's official episode count. (If MAL says 0/unknown, we draw at least 1).
+                const cardCount = totalEpisodes > 0 ? totalEpisodes : 1;
+                document.getElementById('selected-episode').value = 1; 
+
+                for (let i = 1; i <= cardCount; i++) {
+                    const isSelected = i === 1 ? 'border-fuchsia-500 bg-fuchsia-500/10' : 'border-slate-700 bg-slate-800/50';
+
+                    const card = document.createElement('div');
+                    card.className = `episode-card relative flex-none w-40 md:w-48 rounded-xl border-2 ${isSelected} overflow-hidden cursor-pointer transition-all hover:border-fuchsia-400 shrink-0 group select-none`;
+
+                    card.onclick = (e) => {
+                        if (isDragging) { e.preventDefault(); return; }
+                        document.getElementById('selected-episode').value = i;
+                        
+                        document.querySelectorAll('.episode-card').forEach(c => {
+                            c.classList.remove('border-fuchsia-500', 'bg-fuchsia-500/10');
+                            c.classList.add('border-slate-700', 'bg-slate-800/50');
+                        });
+                        card.classList.remove('border-slate-700', 'bg-slate-800/50');
+                        card.classList.add('border-fuchsia-500', 'bg-fuchsia-500/10');
+                    };
+
+                    card.innerHTML = `
+                        <div class="relative aspect-video bg-slate-900 w-full">
+                            <img src="${fallbackBg}" draggable="false" class="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" loading="lazy">
+                        </div>
+                        <div class="p-2">
+                            <p class="text-xs text-fuchsia-400 font-bold tracking-wide">E${i}</p>
+                            <p class="text-[10px] text-slate-300 truncate mt-0.5" title="${cleanTitle}">${cleanTitle}</p>
+                        </div>
+                    `;
+                    episodeList.appendChild(card);
+                }
+            }
+
+            activeMedia.malId = targetMalId;
+            activeMedia.tmdbSeason = targetTmdbSeason;
+        };
+
+        // 🕸️ UI LOADING STATE PREPARATION
+        const spinnerHtml = `
+            <span class="text-[12px] text-fuchsia-400 ml-3 animate-pulse inline-flex items-center gap-1.5 align-middle">
+                <svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                Mapping Universe...
+            </span>`;
+
+        // Put a spinner inside the dropdown menu so it doesn't look empty if clicked early!
+        customSeasonMenu.innerHTML = `
+            <div class="p-5 text-fuchsia-400 text-sm font-bold animate-pulse flex items-center gap-3">
+                <svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                Spider is crawling MAL...
+            </div>`;
+        customSeasonMenu.classList.add('hidden');
+
+        // Load the initial fallback episode
+        handleSeasonChange(baseMalId, fallbackTitle, fallbackTitle, null, 1, 1);
+
+        // Re-inject the spinner into the button (because handleSeasonChange just wiped it out!)
+        document.getElementById('custom-season-text').innerHTML = fallbackTitle + spinnerHtml;
+
+        // 🧠 4. WAKE UP THE SPIDER
+        buildGlobalMalGrid(baseMalId).then(franchiseTimeline => {
+
+            // 🌟 3-TIER SMART SORTER
+            franchiseTimeline.sort((a, b) => {
+                const typeScore = { 'TV': 1, 'ONA': 1, 'Movie': 2, 'OVA': 3, 'Special': 3 };
+                const scoreA = typeScore[a.subtype] || 4;
+                const scoreB = typeScore[b.subtype] || 4;
+
+                if (scoreA !== scoreB) return scoreA - scoreB;
+
+                const getRelationScore = (rel) => {
+                    if (rel === 'Base' || rel === 'Sequel' || rel === 'Prequel') return 1; 
+                    if (rel === 'Spin-off' || rel === 'Side story' || rel === 'Alternative setting' || rel === 'Alternative version') return 2; 
+                    return 3; 
+                };
+                
+                const relScoreA = getRelationScore(a.relationTag);
+                const relScoreB = getRelationScore(b.relationTag);
+
+                if (relScoreA !== relScoreB) return relScoreA - relScoreB;
+
+                const getSeasonNumber = (title) => {
+                    const match = title.match(/season\s*(\d+)|(\d+)(?:st|nd|rd|th)\s*season|part\s*(\d+)/i);
+                    return match ? parseInt(match[1] || match[2] || match[3]) : null;
+                };
+
+                const sNumA = getSeasonNumber(a.title);
+                const sNumB = getSeasonNumber(b.title);
+
+                if (sNumA !== null && sNumB !== null && sNumA !== sNumB) {
+                    return sNumA - sNumB;
+                }
+
+                const dateA = new Date(a.startDate || '2099-01-01').getTime();
+                const dateB = new Date(b.startDate || '2099-01-01').getTime();
+                return dateA - dateB;
+            });
+
+            let availableSeasons = [];
+            let tmdbSeasonCounter = 1;
+
+            franchiseTimeline.forEach(item => {
+                let badge = '';
+                let tmdbSeason = 0;
+
+                if (item.subtype === 'Movie') badge = ' 🎬 Movie';
+                else if (item.subtype === 'OVA' || item.subtype === 'Special') badge = ' ⭐ Special';
+                else if (item.subtype === 'TV' || item.subtype === 'ONA') {
+                    badge = ' 📺 TV';
+                    if (item.relationTag === 'Base' || item.relationTag === 'Sequel' || item.relationTag === 'Prequel') {
+                        tmdbSeason = tmdbSeasonCounter++;
+                    }
+                }
+
+                availableSeasons.push({
+                    malId: item.malId,
+                    cleanTitle: item.title, 
+                    uiTitle: `${item.title} <span class="text-[10px] text-slate-500 ml-2">${badge}</span>`, 
+                    tmdbSeason: tmdbSeason,
+                    episodeCount: item.episodeCount // 🧠 WE ADD THIS!
+                });
+            });
+
+            if (availableSeasons.length === 0) {
+                availableSeasons.push({ malId: baseMalId, cleanTitle: fallbackTitle, uiTitle: fallbackTitle, tmdbSeason: 1, episodeCount: 1 });
+            }
+
+            customSeasonMenu.innerHTML = '';
+
+            availableSeasons.forEach(season => {
+                const btn = document.createElement('button');
+                btn.className = `season-option w-full text-left px-5 py-3 hover:bg-slate-700/50 transition border-l-4 border-transparent text-white font-bold text-sm border-b border-slate-700/30 last:border-b-0`;
+                btn.innerHTML = season.uiTitle;
+
+                // 🧠 AND PASS IT TO THE FUNCTION HERE!
+                btn.onclick = () => handleSeasonChange(season.malId, season.uiTitle, season.cleanTitle, btn, season.tmdbSeason, season.episodeCount);
+                customSeasonMenu.appendChild(btn);
+            });
+
+            const activeSeason = availableSeasons.find(s => s.malId === baseMalId);
+            if (activeSeason) {
+                // When the Spider finishes, this visually removes the spinner!
+                document.getElementById('custom-season-text').innerHTML = activeSeason.uiTitle;
+                activeMedia.tmdbSeason = activeSeason.tmdbSeason;
+
+                const matchingBtn = Array.from(customSeasonMenu.children).find(btn => btn.innerHTML === activeSeason.uiTitle);
+                if (matchingBtn) {
+                    matchingBtn.classList.add('bg-fuchsia-600/20', 'text-fuchsia-400', 'border-fuchsia-500');
+                    matchingBtn.classList.remove('text-white', 'border-transparent');
+                }
+            }
+        }).catch(e => {
+            console.error("Background Spider Failed:", e);
+            document.getElementById('custom-season-text').innerHTML = fallbackTitle;
+        });
+
+        document.getElementById('custom-season-trigger').onclick = () => {
+            customSeasonMenu.classList.toggle('hidden');
+            document.getElementById('season-chevron').classList.toggle('rotate-180');
+        };
+
+        const btnTorrent = document.getElementById('btn-torrent');
+        if (btnTorrent) {
+            btnTorrent.onclick = null;
+            btnTorrent.onclick = () => {
+                startTorrentioStream(tmdbId, fallbackTitle, 'tv');
+            };
+        }
+
+    } catch (e) {
+        console.error("Anime Detail Error:", e);
+    }
+}
+
+// 🕷️ THE JIKAN SPIDER: Fetches the clean MAL franchise universe
+export async function buildGlobalMalGrid(initialMalId) {
+    console.log(`🕷️ Waking up the Jikan Spider... Starting at MAL ID: ${initialMalId}`);
+
+    const todoQueue = [initialMalId];
+    const visitedIds = new Set();
+    const franchiseData = [];
+
+    // 🧠 NEW: The Relationship Memory Map
+    const relationMap = new Map();
+    relationMap.set(initialMalId, 'Base'); // The show you clicked is always the Base
+
+    while (todoQueue.length > 0) {
+        const currentId = todoQueue.shift();
+
+        if (visitedIds.has(currentId)) continue;
+        visitedIds.add(currentId);
+
+        console.log(`[SPIDER] Inspecting MAL ID: ${currentId}...`);
+
+        try {
+            const url = `https://api.jikan.moe/v4/anime/${currentId}/full`;
+            const res = await fetch(url);
+
+            await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit protector
+
+            if (!res.ok) {
+                if (res.status === 429) {
+                    todoQueue.unshift(currentId);
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    continue;
+                }
+                continue;
+            }
+
+            const json = await res.json();
+            const data = json.data;
+            if (!data) continue;
+
+            // Save the data AND the relationship tag!
+            franchiseData.push({
+                malId: currentId,
+                title: data.title_english || data.title,
+                startDate: data.aired?.from,
+                subtype: data.type,
+                episodeCount: data.episodes || 0,
+                relationTag: relationMap.get(currentId) || 'Unknown' // 🧠 Save the tag!
+            });
+
+            if (data.relations) {
+                data.relations.forEach(rel => {
+                    // 🛡️ THE SMART BOUNCER: Ban Recaps and Profiles. Let "Other" (DVD Extras) through.
+                    if (rel.relation === "Summary" || rel.relation === "Character") return;
+
+                    rel.entry.forEach(entry => {
+                        if (entry.type === "anime") {
+                            if (!relationMap.has(entry.mal_id)) {
+                                relationMap.set(entry.mal_id, rel.relation);
+                            }
+
+                            if (!visitedIds.has(entry.mal_id) && !todoQueue.includes(entry.mal_id)) {
+                                todoQueue.push(entry.mal_id);
+                            }
+                        }
+                    });
+                });
+            }
+        } catch (e) {
+            console.warn(`[SPIDER] Failed to fetch MAL ID: ${currentId}`, e);
+        }
+    }
+
+    franchiseData.sort((a, b) => {
+        const dateA = new Date(a.startDate || '2099-01-01');
+        const dateB = new Date(b.startDate || '2099-01-01');
+        return dateA - dateB;
+    });
+
+    return franchiseData;
+}
+
+// 📺 FETCH MAL EPISODES
+async function fetchAllMalEpisodes(malId) {
+    let allEpisodes = [];
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+        const url = `https://api.jikan.moe/v4/anime/${malId}/episodes?page=${page}`;
+        const res = await fetch(url);
+
+        await new Promise(resolve => setTimeout(resolve, 350)); // Rate limit protector
+
+        if (!res.ok) {
+            if (res.status === 429) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                continue;
+            }
+            break;
+        }
+
+        const epData = await res.json();
+
+        if (epData.data && epData.data.length > 0) {
+            allEpisodes = allEpisodes.concat(epData.data);
+            if (epData.pagination && epData.pagination.has_next_page) {
+                page++;
+            } else {
+                hasMore = false;
+            }
+        } else {
+            hasMore = false;
+        }
+    }
+    return allEpisodes;
+}
+
 
 // Global close function
 window.closeMovieDetail = () => {
     document.getElementById('movie-detail-view').classList.add('translate-y-full');
     document.body.style.overflow = ''; // Restore scrolling
+
+    // 🧹 WIPE THE SLATE CLEAN (Prevents UI ghosting on the next click)
+    const episodeList = document.getElementById('episode-list');
+    if (episodeList) episodeList.innerHTML = '';
+
+    const customSeasonMenu = document.getElementById('custom-season-menu');
+    if (customSeasonMenu) customSeasonMenu.innerHTML = '';
+
+    const customSeasonText = document.getElementById('custom-season-text');
+    if (customSeasonText) customSeasonText.innerText = 'Loading...';
 };
-
-
-//#region HARDWARE CHECK
-function getHardwareSupport() {
-    const audio = document.createElement('audio');
-    const video = document.createElement('video');
-
-    // 1. Simple canPlayType checks
-    const dolby = audio.canPlayType('audio/mp4; codecs="ec-3"') !== '' || audio.canPlayType('audio/mp4; codecs="ac-3"') !== '';
-    const claimsHevc = video.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"') !== '' || video.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"') !== '';
-
-    // 2. The Apple Reality Check
-    const isApple = /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent);
-
-    // 3. The Final Verdict: Only trust HEVC if the browser claims it AND it's an Apple device.
-    const trustHevc = claimsHevc && isApple;
-
-    return { dolby, claimsHevc, isApple, trustHevc };
-}
-
-window.DEVICE_HW = getHardwareSupport();
-
-// 👇 THE CLEAN UI BADGE 👇
-//const uiBadge = document.getElementById('dev-simple-hw-badge') || document.createElement('div');
-//uiBadge.id = 'dev-simple-hw-badge';
-//uiBadge.className = "fixed bottom-4 left-4 bg-slate-900/95 text-slate-300 px-4 py-3 rounded-xl border-2 border-slate-700 shadow-2xl z-[9999] text-xs font-mono pointer-events-none flex flex-col gap-1.5";
-//
-//const HW = window.DEVICE_HW;
-//uiBadge.innerHTML = `
-//    <div class="border-b border-slate-700 pb-1 mb-1 text-[10px] text-slate-500 font-bold tracking-widest uppercase">Hardware Scanner v3</div>
-//    <div class="flex justify-between gap-6"><span>Dolby Audio:</span> <span class="${HW.dolby ? 'text-emerald-400' : 'text-red-400'} font-bold">${HW.dolby ? "YES" : "NO"}</span></div>
-//    <div class="flex justify-between gap-6"><span>Claims HEVC:</span> <span class="${HW.claimsHevc ? 'text-amber-400' : 'text-red-400'} font-bold">${HW.claimsHevc ? "YES" : "NO"}</span></div>
-//    <div class="flex justify-between gap-6"><span>Is Apple OS:</span> <span class="${HW.isApple ? 'text-emerald-400' : 'text-slate-500'} font-bold">${HW.isApple ? "YES" : "NO"}</span></div>
-//    <div class="border-t border-slate-700 pt-1 mt-1 flex justify-between gap-6"><span>Trust HEVC:</span> <span class="${HW.trustHevc ? 'text-emerald-400' : 'text-red-500'} font-bold">${HW.trustHevc ? "SAFE" : "NUKE IT"}</span></div>
-//`;
-//if (!document.getElementById('dev-simple-hw-badge')) document.body.appendChild(uiBadge);
-//#endregion
 
 //#region Filter
 
@@ -624,7 +1056,7 @@ function extractLanguageData(pttLanguages, rawTitle) {
 
     // 3. Translate PTT's text array into Emojis!
     const flagDictionary = {
-        english: '🇬🇧', eng: '🇬🇧', en: '🇬🇧',
+        english: 'EN', eng: 'EN', en: 'EN',
         french: '🇫🇷', fre: '🇫🇷', fra: '🇫🇷',
         spanish: '🇪🇸', spa: '🇪🇸', esp: '🇪🇸',
         italian: '🇮🇹', ita: '🇮🇹',
@@ -676,133 +1108,139 @@ function extractLanguageData(pttLanguages, rawTitle) {
 }
 
 function filterAndSortStreams(streams) {
-    // 1️⃣ PARSE AND TAG EVERYTHING
-    let parsedStreams = streams.map(stream => {
-        const fullTitle = stream.title || "";
-        const rawFileName = fullTitle.split('\n')[0];
+    // 1️⃣ THE VIP LIST & AUDIO TIERS
+    const vipGroups = ['tgx', 'qxr', 'rarbg', 'flux', 'fgt', 'rartv', '1337x', 'torrentgalaxy'];
+    const losslessAudio = ['truehd', 'atmos', 'dts-hd', 'dts:x', 'flac'];
+    const premiumAudio = ['dd+', 'e-ac3', 'ac3', 'dts', 'dolby digital'];
 
-        // 🧠 Feed it to PTT
+    // 2️⃣ PARSE AND TAG EVERYTHING
+    let parsedStreams = streams.map(stream => {
+        const fullTitle = (stream.title || "").toLowerCase();
+        const rawFileName = (stream.title || "").split('\n')[0];
+
+        // Feed it to PTT
         const parsed = parseMediaData(rawFileName);
         const cleanTitle = parsed.title || "";
 
-        // 📊 Regex for Seeders & Size
+        // Seeders & Size
         const seederMatch = fullTitle.match(/👤\s*(\d+)/);
         const seeders = seederMatch ? parseInt(seederMatch[1]) : 0;
 
         const sizeMatch = fullTitle.match(/💾\s*([\d.]+)\s*([a-zA-Z]+)/);
         const sizeText = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : "Unknown";
-        let sizeBytes = 0;
-        if (sizeMatch) {
-            const val = parseFloat(sizeMatch[1]);
-            const unit = sizeMatch[2].toUpperCase();
-            sizeBytes = unit.includes('GB') ? val * 1024 : val;
-        }
 
+        // Tracker / Source
         const siteMatch = fullTitle.match(/⚙️\s*([^\n]+)/);
         const trackerName = siteMatch ? siteMatch[1].trim() : "Direct Source";
 
-        // Languages from helper function
+        // Debrid Cache Detection (Torrentio tags cached links in the stream name)
+        const streamName = (stream.name || "").toLowerCase();
+        const isCached = streamName.includes('torbox+') || streamName.includes('rd+') || fullTitle.includes('cached');
+
+        // --- SMART SEASON PACK DETECTOR ---
+        let seasonText = null;
+
+        // 1. Look for explicit ranges (e.g., "S01-S05", "Seasons 1-4")
+        const rangeMatch = fullTitle.match(/(?:s|season[s]?\s*)0*(\d{1,2})\s*-\s*(?:s|season[s]?\s*)?0*(\d{1,2})/i);
+
+        if (rangeMatch) {
+            seasonText = `SEASONS ${rangeMatch[1]}-${rangeMatch[2]}`;
+        } else if (fullTitle.includes('complete series') || fullTitle.includes('the complete')) {
+            seasonText = "COMPLETE SERIES";
+        } else if (Array.isArray(parsed.season) && parsed.season.length > 1) {
+            // PTT found an array of seasons
+            const min = Math.min(...parsed.season);
+            const max = Math.max(...parsed.season);
+            seasonText = `SEASONS ${min}-${max}`;
+        } else if ((fullTitle.includes('season pack') || fullTitle.includes('complete season') || parsed.isComplete) && parsed.season && !Array.isArray(parsed.season)) {
+            seasonText = `SEASON ${parsed.season} PACK`;
+        } else if (fullTitle.includes('season pack')) {
+            seasonText = "SEASON PACK"; // Fallback
+        }
+
+        const isSeasonPack = seasonText !== null;
+
+        // VIP Release Group Detection
+        const isVIP = vipGroups.some(group => fullTitle.includes(group));
+
+        // --- THE NEW AUDIO HIERARCHY ---
+        let audioScore = 0;
+        let audioText = "AAC / Standard";
+        let audioColor = "text-emerald-400"; // Green for safe/standard
+
+        const metaAudio = (parsed.audio || fullTitle).toLowerCase();
+
+        if (losslessAudio.some(a => metaAudio.includes(a))) {
+            audioScore = 100;
+            audioText = "Lossless Spatial (Atmos/TrueHD)";
+            audioColor = "text-fuchsia-400"; // Premium glowing purple
+        } else if (premiumAudio.some(a => metaAudio.includes(a))) {
+            audioScore = 50;
+            audioText = "Premium Surround (Dolby/DTS)";
+            audioColor = "text-blue-400"; // Solid Blue
+        }
+
+        // Languages
         const langData = extractLanguageData(parsed.languages, fullTitle);
 
+        // Video Badges
         let videoCodec = (parsed.codec || "HD").toUpperCase();
         if (videoCodec === 'H264' || videoCodec === 'X264') videoCodec = 'x264';
         if (videoCodec === 'H265' || videoCodec === 'X265' || videoCodec === 'HEVC') videoCodec = 'HEVC/x265';
-        const quality = parsed.quality || "";
-        const badgeText = quality ? `${videoCodec} • ${quality}` : videoCodec;
 
-        let audioText = "Standard Audio";
-        let audioColor = "text-slate-400";
-        const metaAudio = (parsed.audio || "").toLowerCase();
-
-        const isDolby = metaAudio.includes('dolby') || metaAudio.includes('ac3') || metaAudio.includes('eac3') || metaAudio.includes('dd') || metaAudio.includes('atmos');
-        const isWebSafeAudio = metaAudio.includes('aac') || metaAudio.includes('mp3') || metaAudio.includes('opus');
-
-        if (isWebSafeAudio) {
-            audioText = "AAC / Web-Safe";
-            audioColor = "text-emerald-400";
-        } else if (metaAudio.includes('flac') || metaAudio.includes('alac')) {
-            audioText = "FLAC (Lossless)";
-            audioColor = "text-cyan-400";
-        } else if (isDolby) {
-            audioText = "Dolby Audio";
-            audioColor = "text-amber-400";
-        }
-
-        if (langData.isMultiDub) audioText += " (Multi Audio)";
-
-        const isx264 = videoCodec.includes('x264') || videoCodec.includes('h264') || videoCodec.includes('avc');
-        const isHEVC = videoCodec.includes('hevc') || videoCodec.includes('x265') || videoCodec.includes('h265') || parsed.hdr || cleanTitle.includes('dv');
+        let badgeText = parsed.quality ? `${videoCodec} • ${parsed.quality}` : videoCodec;
+        if (isSeasonPack) badgeText = `📦 ${seasonText} • ${badgeText}`;
 
         return {
-            ...stream, meta: parsed, seeders, fullTitle, sizeText, sizeBytes,
-            langCount: langData.score,
-            isx264, isHEVC, isDolby, isMultiDub: langData.isMultiDub, isWebSafeAudio,
+            ...stream, meta: parsed, seeders, fullTitle, sizeText,
+            isCached, isSeasonPack, isVIP, audioScore,
             uiTracker: trackerName,
             uiLangs: langData.uiText,
             uiBadge: badgeText,
-            uiAudioText: audioText, uiAudioColor: audioColor
+            uiAudioText: audioText, uiAudioColor: audioColor,
+
+            // 🧠 THE MASTER DEBRID SCORE
+            // Cached links get +10,000 to guarantee they beat uncached links
+            // VIP gets +500, Season Packs get +1000, Audio gets +100/50, Seeders act as a tie-breaker
+            totalScore: (isCached ? 10000 : 0) +
+                (isSeasonPack ? 1000 : 0) +
+                (isVIP ? 500 : 0) +
+                audioScore +
+                (seeders > 100 ? 100 : seeders) // Cap seeders so they don't overpower quality
         };
     });
 
-    // 2️⃣ THE INCINERATOR
+    // 3️⃣ THE INCINERATOR (The Safety Net)
     let validStreams = parsedStreams.filter(s => {
         const noCams = s.meta.quality !== 'Cam' && s.meta.quality !== 'Telesync';
         const noHardcoded = s.meta.hardcoded !== true;
-        return s.seeders > 0 && noCams && noHardcoded;
+        // Keep it if it has 5+ seeders OR if TorBox already has it cached!
+        const isSafe = s.seeders >= 5 || s.isCached;
+
+        return isSafe && noCams && noHardcoded;
     });
 
-    // 3️⃣ THE MASTER SORT (Highest Seeders first)
-    validStreams.sort((a, b) => b.seeders - a.seeders);
+    // 4️⃣ THE BIG SORT (Highest Score Wins)
+    validStreams.sort((a, b) => b.totalScore - a.totalScore);
 
-    const all4K = validStreams.filter(s => s.meta.resolution === '4k' || s.meta.resolution === '2160p' || s.fullTitle.toLowerCase().includes('4k'));
-    const all1080p = validStreams.filter(s => s.meta.resolution === '1080p' || (s.fullTitle.toLowerCase().includes('1080p') && !s.fullTitle.toLowerCase().includes('4k')));
+    // 5️⃣ THE 3-TIER CATEGORIZATION
+    const all4K = validStreams.filter(s => s.meta.resolution === '4k' || s.meta.resolution === '2160p' || s.fullTitle.includes('4k'));
+    const all1080p = validStreams.filter(s => s.meta.resolution === '1080p' || (s.fullTitle.includes('1080p') && !s.fullTitle.includes('4k')));
 
-    // 🎰 4️⃣ THE 3-SLOT PICKER
-    function fillSlots(pool) {
-        if (pool.length === 0) return [];
+    // The "Everything Else" Tier (720p, SD, or un-tagged older files)
+    const allStandard = validStreams.filter(s => !all4K.includes(s) && !all1080p.includes(s));
 
-        // Slot 1 is ALWAYS the absolute most seeded file.
-        let slot1 = pool[0];
+    // 🎰 6️⃣ THE 3-SLOT PICKER (Grabs the Top 3 for the UI)
+    const top4K = all4K.slice(0, 3);
+    const top1080p = all1080p.slice(0, 3);
+    const topStandard = allStandard.slice(0, 3);
 
-        // Slot 2: Hunt for the most-seeded file that HAS Dolby AND isn't Slot 1
-        let slot2 = pool.find(s => s.isDolby && s !== slot1);
-        if (!slot2 && pool.length > 1) slot2 = pool.find(s => s !== slot1);
+    // 7️⃣ THE LEFTOVERS (For the "Load More" button)
+    const more4K = all4K.slice(3);
+    const more1080p = all1080p.slice(3);
+    const moreStandard = allStandard.slice(3);
 
-        // Slot 3: The Multi-Language Champion
-        // We filter out Slot 1 and 2, then sort the remaining pool by the highest `langCount`
-        let remaining = pool.filter(s => s !== slot1 && s !== slot2);
-        let slot3 = null;
-
-        if (remaining.length > 0) {
-            // Sort by language count first. If it's a tie, fallback to highest seeders!
-            remaining.sort((a, b) => {
-                if (b.langCount !== a.langCount) return b.langCount - a.langCount;
-                return b.seeders - a.seeders;
-            });
-
-            // Only assign Slot 3 if it genuinely has multiple languages or if we just want a 3rd option
-            // (We'll just give them the next best file to guarantee 3 slots)
-            slot3 = remaining[0];
-        }
-
-        return [slot1, slot2, slot3].filter(Boolean); // .filter(Boolean) safely removes any empty slots
-    }
-
-    const top4K = fillSlots(all4K);
-    const top1080p = fillSlots(all1080p);
-
-    // 📱 5️⃣ THE "STORAGE SAVER" SLOT
-    let storageSaver = [...all1080p]
-        .filter(s => s.sizeBytes > 0 && !top1080p.includes(s) && !top4K.includes(s))
-        .sort((a, b) => a.sizeBytes - b.sizeBytes)[0] || null;
-
-    // 6️⃣ THE LEFTOVERS
-    const selectedSet = new Set([...top4K, ...top1080p, storageSaver]);
-
-    const more4K = all4K.filter(s => !selectedSet.has(s));
-    const more1080p = all1080p.filter(s => !selectedSet.has(s));
-
-    return { top4K, top1080p, storageSaver, more4K, more1080p };
+    return { top4K, top1080p, topStandard, more4K, more1080p, moreStandard };
 }
 
 // --- MODAL UI BUILDER ---
@@ -842,21 +1280,23 @@ function showStreamPicker(categorizedStreams, movieTitle) {
         renderStreamCategory('stream-container-1080p', categorizedStreams.top1080p, categorizedStreams.more1080p, movieTitle);
     }
 
-    // Container for the Storage Saver
-    if (categorizedStreams.storageSaver) {
-        const containerSaver = document.createElement('div');
-        containerSaver.id = 'stream-container-saver';
-        containerSaver.className = 'flex flex-col gap-3 mb-6';
+    // Container for Standard / Legacy (720p / SD)
+    const containerStandard = document.createElement('div');
+    containerStandard.id = 'stream-container-standard';
+    containerStandard.className = 'flex flex-col gap-3 mb-6';
 
-        const headerSaver = document.createElement('div');
-        headerSaver.className = "text-emerald-400 font-bold text-xs mb-2 mt-4 uppercase tracking-wider flex items-center gap-2";
-        headerSaver.innerHTML = `<span>📱 Storage Saver (Fast Download)</span> <span class="h-[1px] flex-1 bg-emerald-400/20"></span>`;
+    // Only show this category if there are standard streams, OR if 4K and 1080p are completely empty
+    if (categorizedStreams.topStandard.length > 0) {
+        const headerStandard = document.createElement('div');
+        headerStandard.className = "text-emerald-400 font-bold text-xs mb-2 mt-4 uppercase tracking-wider flex items-center gap-2";
+        headerStandard.innerHTML = `<span>📼 Standard / Legacy (720p & SD)</span> <span class="h-[1px] flex-1 bg-emerald-400/20"></span>`;
+        list.appendChild(headerStandard);
+        list.appendChild(containerStandard);
+        renderStreamCategory('stream-container-standard', categorizedStreams.topStandard, categorizedStreams.moreStandard, movieTitle);
+    }
 
-        list.appendChild(headerSaver);
-        list.appendChild(containerSaver);
-
-        // Render just the 1 card, pass it an empty array for the "more" streams
-        renderStreamCategory('stream-container-saver', [categorizedStreams.storageSaver], [], movieTitle);
+    if (categorizedStreams.top4K.length === 0 && categorizedStreams.top1080p.length === 0 && categorizedStreams.topStandard.length === 0) {
+        list.innerHTML = `<div class="p-4 text-center text-red-400 font-bold">No safe streams found.</div>`;
     }
 
     if (categorizedStreams.top4K.length === 0 && categorizedStreams.top1080p.length === 0) {
@@ -920,18 +1360,15 @@ function createStreamCard(stream, movieTitle, isPremium, isRecommended) {
     let colorClasses = isPremium ? "bg-slate-800/80 hover:bg-slate-700 border-slate-600" : "bg-slate-900/50 hover:bg-slate-800 border-slate-800 opacity-80 hover:opacity-100";
     let buttonHover = "group-hover:bg-blue-600";
 
-    let recommendedBadge = "";
     if (isRecommended) {
+        // Keeps the emerald green glow, but drops the text badge!
         colorClasses = "bg-emerald-900/20 hover:bg-emerald-800/30 border-emerald-500/50";
         buttonHover = "group-hover:bg-emerald-600";
-        recommendedBadge = `<span class="bg-emerald-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wide shadow-sm">Recommended</span>`;
     }
 
-    // Notice how we just use stream.uiTracker, stream.uiBadge, etc.!
     const customTitleHTML = `
         <div class="flex items-center flex-wrap gap-2">
             <span class="font-bold ${isPremium ? 'text-blue-300' : 'text-slate-400'} text-sm">${stream.uiTracker}</span>
-            ${isRecommended ? recommendedBadge : ''}
             ${stream.uiLangs ? `<span class="text-sm drop-shadow-md">${stream.uiLangs}</span>` : ''}
             <span class="bg-slate-700/50 text-slate-300 text-[9px] px-1.5 py-0.5 rounded uppercase font-bold border border-slate-600">${stream.uiBadge}</span>
         </div>
@@ -953,7 +1390,6 @@ function createStreamCard(stream, movieTitle, isPremium, isRecommended) {
 
     btn.onclick = () => {
         closeStreamPicker();
-        // 🧠 THE VAULT CONNECTION: Pass the data into the TorBox sender!
         sendMagnetToTorbox(magnetLink, movieTitle);
     };
 
@@ -972,44 +1408,69 @@ export async function startTorrentioStream(id, movieTitle, type) {
     btn.disabled = true;
 
     try {
-        const idUrl = `https://api.themoviedb.org/3/${type}/${id}/external_ids?api_key=${TMDB_KEY}`;
-        const idRes = await fetch(idUrl);
-        const idData = await idRes.json();
-        const imdbId = idData.imdb_id;
+        // Grab the selected episode safely
+        const epInput = document.getElementById('selected-episode');
+        const e = (type === 'tv' && epInput) ? epInput.value : 1;
 
-        if (!imdbId) throw new Error("No IMDB ID found for streaming.");
+        let streamData = { streams: [] };
+        let typePath = '';
+        let torrentioUrl = '';
 
-        let typePath = `movie/${imdbId}`;
-        if (type === 'tv') {
-            const s = document.getElementById('season-select').value;
-            const e = document.getElementById('selected-episode').value;
-            typePath = `series/${imdbId}:${s}:${e}`;
+        // 🌸 ==========================================
+        // 🌸 TRACK A: THE ANIME ROUTE (Kitsu Direct)
+        // ==========================================
+        if (activeMedia.kitsuId && type === 'tv') {
+            typePath = `anime/kitsu:${activeMedia.kitsuId}:${e}`;
+            torrentioUrl = `https://torrentio.strem.fun/torbox=${tbKey}|debridoptions=nodownloadlinks/stream/${typePath}.json`;
+
+            console.log(`🌸 [ANIME MODE] Fetching Kitsu Route directly: ${typePath}`);
+
+            const streamRes = await fetch(torrentioUrl);
+            if (streamRes.ok) {
+                streamData = await streamRes.json();
+            } else {
+                console.warn(`⚠️ Torrentio Server Error (${streamRes.status}) on Kitsu route.`);
+            }
+        }
+        // 🎬 ==========================================
+        // 🎬 TRACK B: THE WESTERN ROUTE (IMDB/TMDB)
+        // ==========================================
+        else {
+            const idUrl = `https://api.themoviedb.org/3/${type}/${id}/external_ids?api_key=${TMDB_KEY}`;
+            const idRes = await fetch(idUrl);
+            const idData = await idRes.json();
+            const imdbId = idData.imdb_id;
+
+            if (!imdbId) throw new Error("No IMDB ID found for streaming.");
+
+            const seasonInput = document.getElementById('season-select');
+            const s = (type === 'tv' && seasonInput) ? seasonInput.value : 1;
+
+            typePath = type === 'tv' ? `series/${imdbId}:${s}:${e}` : `movie/${imdbId}`;
+            torrentioUrl = `https://torrentio.strem.fun/torbox=${tbKey}|debridoptions=nodownloadlinks/stream/${typePath}.json`;
+
+            console.log(`🎬 [WESTERN MODE] Fetching TMDB/IMDB Route: ${typePath}`);
+
+            const streamRes = await fetch(torrentioUrl);
+            if (streamRes.ok) {
+                streamData = await streamRes.json();
+            } else {
+                console.warn(`⚠️ Torrentio Server Error (${streamRes.status}) on IMDB route.`);
+            }
         }
 
-        // We expanded the quality filter and limit to give you better choices!
-        // 🚨 THE FIX: Removed the broken "providers" tag!
-        const torrentioUrl = `https://torrentio.strem.fun/torbox=${tbKey}|debridoptions=nodownloadlinks/stream/${typePath}.json`;
-        const streamRes = await fetch(torrentioUrl);
-        const streamData = await streamRes.json();
-
+        // --- FINAL VALIDATION ---
         if (!streamData.streams || streamData.streams.length === 0) {
-            throw new Error("No streams found on Torrentio.");
+            throw new Error("No streams found on Torrentio for this media.");
         }
 
-        // 🚨 RUN THE DATA THROUGH OUR NEW ENGINE 🚨
+        // Run the data through our filter engine
         const categorizedStreams = filterAndSortStreams(streamData.streams);
 
         if (categorizedStreams.top4K.length === 0 && categorizedStreams.top1080p.length === 0) {
             throw new Error("Found streams, but none were instantly cached in 4K or 1080p.");
         }
 
-        const debugData = {
-            streams4K: categorizedStreams.top4K.map(s => ({ score: s.score, name: s.name, title: s.title })),
-            streams1080p: categorizedStreams.top1080p.map(s => ({ score: s.score, name: s.name, title: s.title }))
-        };
-        console.log("🔍 CLEAN FILTERED LINK DATA:", debugData);
-
-        // Send the CATEGORIZED data to our visual picker!
         showStreamPicker(categorizedStreams, movieTitle);
 
     } catch (e) {
@@ -1025,7 +1486,6 @@ window.closeStreamPicker = () => {
     document.getElementById('stream-picker-modal').classList.add('hidden');
 };
 
-
 // Add a link to users library  
 async function sendMagnetToTorbox(magnetLink, movieTitle) {
     const tbKey = localStorage.getItem('tb_api_key');
@@ -1040,7 +1500,7 @@ async function sendMagnetToTorbox(magnetLink, movieTitle) {
         // 🧠 THE METADATA VAULT
         const hashMatch = magnetLink.match(/urn:btih:([a-zA-Z0-9]+)/i);
 
-        // Read directly from the activeMedia state we locked earlier!
+        // Read directly from the activeMedia
         if (hashMatch && activeMedia.id) {
             const hash = hashMatch[1].toLowerCase();
             let vault = JSON.parse(localStorage.getItem('tmdb_vault') || '{}');
@@ -1048,7 +1508,8 @@ async function sendMagnetToTorbox(magnetLink, movieTitle) {
             vault[hash] = {
                 id: activeMedia.id,
                 type: activeMedia.type,
-                poster: activeMedia.poster
+                poster: activeMedia.poster,
+                kitsuId: activeMedia.kitsuId || null
             };
             localStorage.setItem('tmdb_vault', JSON.stringify(vault));
             console.log(`📦 Saved [${hash}] -> ${movieTitle} to Local Vault!`);

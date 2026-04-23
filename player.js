@@ -1,12 +1,13 @@
 import { MKVPlayer } from './engine/mkv_lib.js';
-import { smartFetch, scrobble, showToast } from './script.js';
+import { smartFetch, appState, showToast } from './script.js';
 
 export let art = null;
 export let currentStreamUrl = "";
+let abortPlayback = false;
 
 // --- THE ULTIMATE KILL SWITCH ---
 export function stopPlayback() {
-    window.abortPlayback = true;
+    abortPlayback = true;
 
     // 1. Nuke the WASM Engine Memory first
     if (art && art.mkvEngine) {
@@ -49,7 +50,7 @@ export async function requestLink(tid, fid, torrentName, fileName) {
     // before we hammer the TorBox API for a new link. Prevents timeouts!
     await new Promise(r => setTimeout(r, 150));
 
-    window.abortPlayback = false;
+    abortPlayback = false;
 
     const key = localStorage.getItem('tb_api_key');
     const list = document.getElementById('file-list');
@@ -67,7 +68,7 @@ export async function requestLink(tid, fid, torrentName, fileName) {
         }
 
         // Did the user click another movie while we were fetching?
-        if (window.abortPlayback) {
+        if (abortPlayback) {
             console.log("Ghost playback prevented! User clicked something else.");
             return;
         }
@@ -85,10 +86,10 @@ export async function requestLink(tid, fid, torrentName, fileName) {
 // --- PLAYER INITIALIZATION ---
 export function startPlayer(url, name) {
     stopPlayback();
-    window.abortPlayback = false;
+    abortPlayback = false;
 
     // Attach the URL to the global window object for the External Player modal
-    window.currentStreamUrl = url;
+    appState.currentStreamUrl = url;
     currentStreamUrl = url;
 
     const wrapper = document.getElementById('player-wrapper');
@@ -162,12 +163,12 @@ export function startPlayer(url, name) {
                     const player = new MKVPlayer(videoElement);
                     artInstance.mkvEngine = player; // Attach IMMEDIATELY so stopPlayback can find it
 
-                    if (window.abortPlayback) { player.destroy(); return; }
+                    if (abortPlayback) { player.destroy(); return; }
 
                     await player.load(artUrl);
 
                     // 🛑 RACE CONDITION CATCH: Check again after heavy memory load
-                    if (window.abortPlayback) {
+                    if (abortPlayback) {
                         console.warn("WASM loaded but user clicked away. Self-destructing!");
                         player.destroy();
                         return;
@@ -176,7 +177,7 @@ export function startPlayer(url, name) {
                     artInstance.notice.show = "Engine Ready!";
 
                     videoElement.addEventListener('loadeddata', () => {
-                        if (!window.abortPlayback) artInstance.play();
+                        if (!abortPlayback) artInstance.play();
                     }, { once: true });
                 } catch (error) {
                     console.error("Engine Crash:", error);
